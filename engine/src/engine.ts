@@ -6,6 +6,7 @@ export const RULES = { HP: 7, SP: 7, HAND_LIMIT: 8, FIRST_HAND: 3, SECOND_HAND: 
 // 风向权重（提案）：默认三种各 1/3；风场持有者 顺风 50% / 无风 30% / 逆风 20%
 export const WIND_WEIGHTS = { normal: { tail: 1, calm: 1, head: 1 }, field: { tail: 5, calm: 3, head: 2 } };
 
+export const WIND_ZH: Record<Wind, string> = { tail: '顺风', head: '逆风', calm: '无风' };
 export class RuleError extends Error {}
 
 function rand(s: GameState): number { // mulberry32，可复现
@@ -71,6 +72,7 @@ function startPlayPhase(s: GameState, p: PlayerId, ctx: Ctx) {
   s.phase = { kind: 'play', active: p };
   s.players[p].sp = RULES.SP;
   s.wind = rollWind(s, p, ctx);
+  s.log.push(`第 ${s.round} 回合 · P${p} 出牌阶段，风向 ${WIND_ZH[s.wind]}`);
   if (s.players[p].skipPhases > 0) { s.players[p].skipPhases--; s.log.push(`P${p} 跳过本出牌阶段`); endPhase(s, p, ctx); return; }
   // #41 朝圣者：对方手里有付得起的朝圣者，就在本阶段开始前给他一个窗口
   const o = other(p), op = s.players[o];
@@ -99,7 +101,11 @@ function applyEffect(s: GameState, e: Effect, it: StackItem, ctx: Ctx) {
     case 'damage': {
       const base = e.amount === 'X' ? (it.x ?? 0) : typeof e.amount === 'object' ? (it.x ?? 0) - e.amount.xMinus : e.amount;
       const wind = hasWindField(s, owner, ctx) && s.phase.kind !== 'over' && s.phase.active === owner ? (s.wind === 'tail' ? 1 : s.wind === 'head' ? -1 : 0) : 0;
-      for (const p of targets(owner, e.target)) s.players[p].hp -= Math.max(0, (p === owner ? base : base * m) + wind);
+      for (const p of targets(owner, e.target)) {
+        let n = Math.max(0, (p === owner ? base : base * m) + wind);
+        if (p !== owner && it.absorb) { const a = Math.min(it.absorb, n); n -= a; it.absorb -= a; }   // #9 抵消的点数先扣
+        s.players[p].hp -= n;
+      }
       break;
     }
     case 'heal': for (const p of targets(owner, e.target)) { const pl = s.players[p];
@@ -115,7 +121,7 @@ function applyEffect(s: GameState, e: Effect, it: StackItem, ctx: Ctx) {
     } break;
     case 'skip_next_phase': for (const p of targets(owner, e.target)) s.players[p].skipPhases += e.count ?? 1; break;
     case 'choice': { const opt = e.options[it.choice ?? 0]; if (!opt) throw new RuleError('无效的选项'); applyEffects(s, opt, it, ctx); break; }
-    case 'qte': if ((it.qteHits ?? 0) >= RULES.QTE_PASS) applyEffects(s, e.onPass, it, ctx); else s.log.push('QTE 未通过'); break;
+    case 'qte': if ((it.qteHits ?? 0) >= RULES.QTE_PASS) applyEffects(s, e.onPass, it, ctx); else s.log.push(`${ctx.cards[it.card.defId].name}：QTE 未通过，效果不发动`); break;
     case 'if_friday': applyEffects(s, ctx.isFriday ? e.then : e.else, it, ctx); break;
     case 'vs_faction': if (s.players[other(owner)].faction === e.faction) applyEffects(s, e.then, it, ctx); break;
     case 'set_hp': for (const p of targets(owner, e.target)) s.players[p].hp = e.value; break;
@@ -132,7 +138,7 @@ function custom(s: GameState, key: string, it: StackItem, ctx: Ctx) {
   switch (key) {
     case 'bleed': {   // #3：对方手牌 + 对方效果区里的金属制牌，每张 1 伤；本牌放进对方手牌
       const n = E.hand.filter((c) => has(c, 'metal')).length + E.field.filter((f) => has(f.card, 'metal')).length;
-      if (n > 0) applyEffect(s, dmgE(n), it, ctx); else s.log.push('流血!!! 无效');
+      if (n > 0) applyEffect(s, dmgE(n), it, ctx); else s.log.push('流血!!!：对方没有金属制牌，无伤害');
       it.dest = 'enemyHand'; break;
     }
     case 'math_quiz': {   // #4：对方随机弃 2 张，出牌方可从中拿 1 张
@@ -149,19 +155,19 @@ function custom(s: GameState, key: string, it: StackItem, ctx: Ctx) {
       if (fi >= 0) { const f = E.field.splice(fi, 1)[0]; s.players[f.owner].discard.push(f.card); break; }
       const pool = E.hand.filter((c) => has(c, 'flammable'));   // 没选或选错：随机一张（服务端超时也走这里）
       if (pool.length) { const c = pool[Math.floor(rand(s) * pool.length)]; E.discard.push(E.hand.splice(E.hand.indexOf(c), 1)[0]); }
-      else s.log.push('对方没有可燃牌');
+      else s.log.push('鲨鲨の怒火：对方没有可燃牌');
       break;
     }
     case 'suppress_card': {   // #18：压制对方 1 张手牌，本回合打不出；不打断已打出的牌
       const c = E.hand.find((h) => h.uid === it.targetUid) ?? E.hand[Math.floor(rand(s) * E.hand.length)];
-      if (c && !E.suppressed.includes(c.uid)) E.suppressed.push(c.uid);
+      if (c && !E.suppressed.includes(c.uid)) { E.suppressed.push(c.uid); s.log.push(`P${en} 的 1 张手牌本回合被压制`); }
       break;
     }
-    case 'change_wind': if (it.wind) { s.wind = it.wind; s.log.push(`风向改为 ${it.wind}`); } break;   // #31
+    case 'change_wind': if (it.wind) { s.wind = it.wind; s.log.push(`风向改为 ${WIND_ZH[it.wind]}`); } break;   // #31
     case 'fridge_skip': E.skipPhases += it.with?.defId === 'XHS-060' ? 2 : 1; break;   // #32，跳过次数不乘倍率
     case 'remove_from_my_zone': {   // #37：移除对方放在我效果区的 1 张牌
       const i = Math.max(M.field.findIndex((f) => f.owner === en && f.card.uid === it.targetUid), M.field.findIndex((f) => f.owner === en));
-      if (i >= 0 && M.field[i].owner === en) { const f = M.field.splice(i, 1)[0]; E.discard.push(f.card); } else s.log.push('工兵铲：没有可移除的牌');
+      if (i >= 0 && M.field[i].owner === en) { const f = M.field.splice(i, 1)[0]; E.discard.push(f.card); } else s.log.push('工兵铲：自己效果区里没有对方放的牌，无效果');
       break;
     }
     case 'dorm_x3':   // #38：己方效果区有宿舍卡就生效，下一张牌 ×3（补充裁定四）；同时打出的组合在 settle 里处理
@@ -184,7 +190,7 @@ function custom(s: GameState, key: string, it: StackItem, ctx: Ctx) {
       break;
     case 'physics_formulas':   // #64：服务端比对公式库后填 formulaOk
       if (it.formulaOk ?? (it.qteHits ?? 0) >= RULES.QTE_PASS) { applyEffect(s, { op: 'sp', target: 'self', delta: 1 }, it, ctx); applyEffect(s, { op: 'heal', target: 'self', amount: 1 }, it, ctx); }
-      else s.log.push('公式未全部匹配');
+      else s.log.push('Physics：公式未全部匹配，无效果');
       break;
     case 'cost_minus_2': if (!it.with) s.log.push('意见箱需与另一张牌同时打出，单独打出无效果'); break;   // #67，减费在出牌时算
     default: s.log.push(`[未实现] ${key}`);
@@ -238,7 +244,7 @@ function tickFifthDay(s: GameState, skipUid?: number) {   // skipUid：这次出
     if (f.card.defId !== 'XHS-009' || f.card.uid === skipUid) return true;
     f.count = (f.count ?? 0) + 1;
     if (f.count < 5) return true;
-    s.players[other(f.owner)].hp -= 3; s.players[f.owner].discard.push(f.card); s.log.push('「等成绩的第5天」触发：对方 HP-3');
+    s.players[other(f.owner)].hp -= 3; s.players[f.owner].discard.push(f.card); s.log.push(`「等成绩的第5天」满 5 次出牌：P${other(f.owner)} HP-3`);
     return false;
   });
 }
@@ -248,7 +254,7 @@ function settle(s: GameState, it: StackItem, ctx: Ctx) {
   const pl = s.players[it.owner], en = s.players[other(it.owner)];
   // 用攻击牌指定对方效果区的 #9：这次攻击改为摧毁它
   const fifth = def.type === 'attack' && !it.cancelled ? en.field.findIndex((f) => f.card.uid === it.targetUid && f.card.defId === 'XHS-009') : -1;
-  if (fifth >= 0) { const f = en.field.splice(fifth, 1)[0]; s.players[f.owner].discard.push(f.card); s.log.push('「等成绩的第5天」被攻击摧毁'); }
+  if (fifth >= 0) { const f = en.field.splice(fifth, 1)[0]; s.players[f.owner].discard.push(f.card); s.log.push(`${def.name} 摧毁了 P${other(it.owner)} 的「等成绩的第5天」（这次攻击不再造成其他效果）`); }
   else if (!it.cancelled) {
     applyEffects(s, def.effects, it, ctx);
     if (it.with && it.with.defId === 'XHS-060') applyEffects(s, ctx.cards['XHS-060'].effects, { ...it, card: it.with, mult: it.withMult }, ctx);
@@ -264,12 +270,12 @@ function settle(s: GameState, it: StackItem, ctx: Ctx) {
 }
 
 function endPhase(s: GameState, p: PlayerId, ctx: Ctx) {
-  if (s.players[p].hp <= 0) { s.phase = { kind: 'over', winner: other(p) }; s.log.push(`P${p} 出牌阶段结束时 HP≤0，判负`); return; }
+  if (s.players[p].hp <= 0) { s.phase = { kind: 'over', winner: other(p) }; s.log.push(`P${p} 出牌阶段结束时 HP ≤ 0，判负`); return; }
   // 按出牌方自己回合计时的持续牌（宿舍卡）：出牌方每结束一个自己的出牌阶段减 1
   for (const pl of s.players) pl.field = pl.field.filter((f) => {
     if (f.owner !== p || f.roundsLeft === undefined || !ctx.cards[f.card.defId].persistent?.ownTurns) return true;
     if (--f.roundsLeft > 0) return true;
-    s.players[f.owner].discard.push(f.card); s.log.push(`${ctx.cards[f.card.defId].name} 到期`); return false;
+    s.players[f.owner].discard.push(f.card); s.log.push(`P${f.owner} 的 ${ctx.cards[f.card.defId].name} 到期，移入弃牌堆`); return false;
   });
   if (p === s.first) return startPlayPhase(s, other(p), ctx);
   draw(s, s.first, RULES.END_DRAW); draw(s, other(s.first), RULES.END_DRAW);
@@ -279,12 +285,12 @@ function endPhase(s: GameState, p: PlayerId, ctx: Ctx) {
   for (const pl of s.players) pl.field = pl.field.filter((f) => {
     if (f.roundsLeft === undefined || ctx.cards[f.card.defId].persistent?.ownTurns) return true;
     if (--f.roundsLeft > 0) return true;
-    s.players[f.owner].discard.push(f.card); return false;
+    s.players[f.owner].discard.push(f.card); s.log.push(`P${f.owner} 的 ${ctx.cards[f.card.defId].name} 到期，移入弃牌堆`); return false;
   });
-  for (const q of [0, 1] as PlayerId[]) { const pl = s.players[q]; if (pl.deck.length === 0) { pl.maxHp--; pl.hp = Math.min(pl.hp, pl.maxHp); } }
+  for (const q of [0, 1] as PlayerId[]) { const pl = s.players[q]; if (pl.deck.length === 0) { pl.maxHp--; s.log.push(`P${q} 牌库已空，HP 上限 -1（现为 ${pl.maxHp}）`); pl.hp = Math.min(pl.hp, pl.maxHp); } }
   const dead = ([0, 1] as PlayerId[]).filter((q) => s.players[q].maxHp <= 0);
-  if (dead.length === 2) { s.phase = { kind: 'over', winner: 'draw' }; return; }
-  if (dead.length === 1) { s.phase = { kind: 'over', winner: other(dead[0]) }; return; } // 立刻判负（A3）
+  if (dead.length === 2) { s.phase = { kind: 'over', winner: 'draw' }; s.log.push('双方 HP 上限都降到 0，平局'); return; }
+  if (dead.length === 1) { s.phase = { kind: 'over', winner: other(dead[0]) }; s.log.push(`P${dead[0]} HP 上限降到 0，判负`); return; } // 立刻判负（A3）
   startPlayPhase(s, s.first, ctx);
 }
 
@@ -333,6 +339,7 @@ function mainPlay(s: GameState, player: PlayerId, a: Extract<Action, { type: 'pl
     mult: dormMult(s, player, def, boost), with: wc, withMult: wdef ? dormMult(s, player, wdef, boost) : undefined };
   // 攻击牌指定摧毁对方的 #9：先摧毁，这张 #9 不再因这次出牌计数（补充裁定四）
   const hitsFifth = def.type === 'attack' && s.players[other(player)].field.some((f) => f.card.uid === a.targetUid && f.card.defId === 'XHS-009') ? a.targetUid : undefined;
+  s.log.push(`P${player} 打出 ${def.name}${wdef ? ` + ${wdef.name}` : ''}${a.x !== undefined && def.x ? `（X=${a.x}）` : ''}${free ? '（朝圣者，免费）' : cost ? `，花费 ${cost} SP` : ''}`);
   tickFifthDay(s, hitsFifth); if (wc) tickFifthDay(s, hitsFifth);
   s.stack.push(it);
   const o = other(player);
@@ -376,6 +383,7 @@ export function apply(state: GameState, a: Action, ctx: Ctx): GameState {
     if (ph.step === 'offer') {
       const c = pl.hand.find((h) => h.uid === a.uid); if (!c || c.defId !== 'XHS-041') throw new RuleError('这里只能打出朝圣者');
       pay(pl, ctx.cards['XHS-041'], undefined, c.uid); pl.discard.push(takeFromHand(pl, c.uid)); tickFifthDay(s);
+      s.log.push(`P${a.player} 打出 朝圣者，可以免费再打出 1 张牌`);
       s.phase = { kind: 'interject', active: ph.active, responder: ph.responder, step: 'play' };
       return s;
     }
@@ -395,6 +403,7 @@ export function apply(state: GameState, a: Action, ctx: Ctx): GameState {
       // #62/#63 的免费出牌：打出任意 1 张手牌，不耗 SP，先结算它，再结算 #62/#63
       checkPlayable(pl, def, card.uid);
       takeFromHand(pl, a.uid); tickFifthDay(s);
+      s.log.push(`P${a.player} 免费打出 ${def.name}（先于 ${ctx.cards[top.card.defId].name} 结算）`);
       settle(s, { card, owner: a.player, x: a.x, choice: a.choice, qteHits: a.qteHits, targetUid: a.targetUid, wind: a.wind, formulaOk: a.formulaOk }, ctx);
       if (s.pending) { top.deferred = true; resume(s, ph.active); return s; }   // 免费牌要选牌：先选完，再结算 #62/#63
       settle(s, s.stack.pop()!, ctx);
@@ -406,11 +415,20 @@ export function apply(state: GameState, a: Action, ctx: Ctx): GameState {
     else { pay(pl, def, a.x, card.uid); takeFromHand(pl, a.uid); }
     tickFifthDay(s);
     const resp: StackItem = { card, owner: a.player, x: a.x, choice: a.choice, qteHits: a.qteHits };
-    top.cancelled = true;                                   // 防御 / 无效化：栈顶那张作废
+    const tname = ctx.cards[top.card.defId].name, pl2 = s.players[a.player];
     applyEffects(s, def.counter!.onCounter ?? [], resp, ctx);
-    s.log.push(`${def.name} 反制了 ${ctx.cards[top.card.defId].name}`);
-    settle(s, s.stack.pop()!, ctx);                         // 被反制的牌进弃牌堆，不结算
-    const pl2 = s.players[a.player]; (def.returnsToHand ? pl2.hand : pl2.discard).push(card); // 防御牌不能被反防（直接落地）
+    if (def.counter!.absorb) {   // #9：只抵消 N 点伤害，攻击照常结算
+      top.absorb = (top.absorb ?? 0) + def.counter!.absorb;
+      const hp0 = pl2.hp;
+      settle(s, s.stack.pop()!, ctx);
+      s.log.push(`P${a.player} 打出 ${def.name} 响应，抵消 ${def.counter!.absorb} 点伤害（${tname} 造成 ${Math.max(0, hp0 - pl2.hp)} 点）`);
+      pl2.discard.push(card);
+    } else {
+      top.cancelled = true;                                   // 防御 / 无效化：栈顶那张作废
+      s.log.push(def.counter!.mode === 'negate' ? `P${a.player} 打出 ${def.name}，让 ${tname} 无效` : `P${a.player} 打出 ${def.name}，挡住了 ${tname}`);
+      settle(s, s.stack.pop()!, ctx);                         // 被反制的牌进弃牌堆，不结算
+      (def.returnsToHand ? pl2.hand : pl2.discard).push(card); // 防御牌不能被反防（直接落地）
+    }
     resume(s, ph.active);
     return s;
   }
@@ -428,4 +446,46 @@ export function viewFor(s: GameState, p: PlayerId) {
   return { ...rest, self: p, players: s.players.map((pl, q) => ({ ...pl, deck: pl.deck.length,
     hand: q === p ? pl.hand : pl.hand.length,
     suppressed: q === p ? pl.suppressed : pl.suppressed.length })) };   // 对手被压制的是哪张不下发
+}
+
+// 出牌提示：这张手牌现在能不能打、要付多少 SP。只读 state.players[seat]、phase、stack，
+// 所以 viewFor() 给客户端的视图也能直接传进来（客户端和引擎用同一套判定）。
+export interface PlayHint { ok: boolean; cost: number; reason?: string; note?: string; mode?: 'main' | 'response' | 'free' | 'interject' | 'give' }
+export function canPlay(s: Pick<GameState, 'phase' | 'stack'> & { players: any[] }, seat: PlayerId, uid: number, ctx: Ctx): PlayHint {
+  const ph = s.phase, pl = s.players[seat] as PlayerState;
+  const card = Array.isArray(pl?.hand) ? pl.hand.find((c) => c.uid === uid) : undefined;
+  if (!card) return { ok: false, cost: 0, reason: '手牌里没有这张' };
+  const def = ctx.cards[card.defId];
+  if (!def) return { ok: false, cost: 0, reason: '未知的牌' };
+  const no = (reason: string, cost = 0): PlayHint => ({ ok: false, cost, reason });
+  const check = (): string | undefined => { try { checkPlayable(pl, def, uid); } catch (e) { return (e as Error).message; } };
+  const cost = def.x ? def.x.min : baseCost(pl, def);
+  const afford = (c: number) => c <= pl.sp ? undefined : `费用不足：需要 ${c} SP，当前 ${pl.sp}`;
+  if (ph.kind === 'over') return no('对局已结束');
+  if (ph.kind === 'select') {
+    if (ph.chooser !== seat) return no('等对方选牌');
+    return ph.reason === 'superman' ? { ok: true, cost: 0, mode: 'give', note: '点击交给对方' } : no('请从对方弃掉的牌里选');
+  }
+  if (ph.kind === 'interject') {
+    if (ph.responder !== seat) return no('不是你的出牌阶段');
+    if (ph.step === 'offer') {
+      if (def.id !== 'XHS-041') return no('现在只能打出 朝圣者');
+      const r = check() ?? afford(cost); return r ? no(r, cost) : { ok: true, cost, mode: 'interject' };
+    }
+    const r = check(); return r ? no(r) : { ok: true, cost: 0, mode: 'main', note: '朝圣者：这张免费' };
+  }
+  if (ph.kind === 'response') {
+    if (ph.responder !== seat) return no('对方正在响应');
+    const top = s.stack[s.stack.length - 1], tdef = top && ctx.cards[top.card.defId];
+    if (ph.free) { const r = def.status === 'deleted' ? '这张卡已删除' : pl.suppressed.includes(uid) ? '这张牌本回合被压制，不能打出' : undefined;
+      return r ? no(r) : { ok: true, cost: 0, mode: 'free', note: '免费出牌' }; }
+    if (!tdef || !counters(def, tdef, top.choice)) return no(def.counter ? `不能反制 ${tdef?.name ?? '这张牌'}` : '响应窗口只能打能反制的牌');
+    const r = check() ?? afford(cost); return r ? no(r, cost) : { ok: true, cost, mode: 'response', note: def.counter?.absorb ? `抵消 ${def.counter.absorb} 点伤害` : undefined };
+  }
+  if (ph.active !== seat) return no('不是你的出牌阶段');
+  const r = check() ?? afford(cost); if (r) return no(r, cost);
+  const note = def.type === 'defense' && !def.effects.length ? '防御牌：主动打出没有效果，通常留着响应'
+    : def.id === 'XHS-041' ? '朝圣者要在对方出牌阶段开始时打，现在打无效果'
+    : def.id === 'XHS-067' ? '意见箱要和另一张牌同时打出' : def.x ? `X 费：${def.x.min}–${Math.min(def.x.max, pl.sp)}` : undefined;
+  return { ok: true, cost, mode: 'main', note };
 }

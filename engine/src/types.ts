@@ -28,6 +28,7 @@ export interface Counter {
   tags?: Tag[];                // 例如 #13 只防鲨鲨
   exceptIds?: string[];        // 例如 #48 对 XHS-049 无效
   mode: 'block' | 'negate';    // block：抵消一次攻击；negate：让那张牌无效（#5 对 #4）
+  absorb?: number;             // 有这个字段：不挡整次攻击，只抵消这么多点伤害（#9 响应打出抵 1 点，B7）
   onCounter?: Effect[];        // 反制时附带的效果（老木盾反伤、神奇手套回血）
 }
 
@@ -71,6 +72,7 @@ export interface StackItem { card: CardInst; owner: PlayerId; x?: number; choice
   deferred?: boolean;   // 免费反击里先进了 select，等选完再结算
   mult?: number;               // 宿舍卡加成倍率（#57/#58/#38），只乘有益数值
   with?: CardInst; withMult?: number; // 同时打出的另一张牌（#32+#60、#55+#45、#57/#58+#38、任意+#67）
+  absorb?: number;             // 被响应牌抵消的伤害点数（#9），结算对对方的伤害时扣掉
   dest?: 'enemyHand' }         // #3 结算后放进对方手牌
 
 export type Phase =

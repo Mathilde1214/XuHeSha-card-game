@@ -1,6 +1,7 @@
 // 续禾杀 最简网页客户端：状态全部来自服务端的 viewFor()，客户端只发意图（protocol-v1）
+import { fx } from './fx.js';
+import { canPlay, WIND_ZH as WIND } from './engine.js';   // engine.js 由 client/build.ts 生成
 const $ = (id) => document.getElementById(id);
-const WIND = { tail: '顺风', head: '逆风', calm: '无风' };
 const FACTION = { sweet: '甜粽党', savory: '肉粽党' };
 const TYPE = { attack: '攻击', defense: '防御', resource: '资源', effect: '效果' };
 const COMBOS = { 'XHS-032': ['XHS-060'], 'XHS-055': ['XHS-045'], 'XHS-057': ['XHS-038'], 'XHS-058': ['XHS-038'] };
@@ -37,7 +38,7 @@ function onMsg(m) {
     case 'reject':
       if (/重连凭证/.test(m.reason ?? '')) { sessionStorage.removeItem('xhs-token'); break; }
       toast(m.reason ?? '操作被拒绝'); break;
-    case 'state': view = m.view; waiting = false; logLines.push(...(m.log ?? [])); $('lobby').hidden = true; $('game').hidden = false; closeModal('flow'); render(); break;
+    case 'state': stateChain = stateChain.then(() => onState(m)).catch((e) => console.error(e)); break;
     case 'waiting': waiting = true; render(); break;
     case 'timer': deadline = m.deadline; timerPhase = m.phase; break;
     case 'opponent': toast(m.online ? '对手已重新连上' : '对手掉线了，1 分钟内没回来判负'); break;
@@ -48,6 +49,21 @@ function onMsg(m) {
     case 'formula_result': closeModal('flow'); toast(m.pass ? '公式全部正确' : `公式未全部匹配`); break;
   }
 }
+
+// 新状态：先给消失的效果区牌播摧毁动画，再重绘；HP 变化在重绘后播受伤 / 治疗
+let stateChain = Promise.resolve();
+const fieldUids = (v) => new Set(v ? v.players.flatMap((pl) => pl.field.map((f) => f.card.uid)) : []);
+async function onState(m) {
+  const prev = view, gone = [...fieldUids(prev)].filter((u) => !fieldUids(m.view).has(u));
+  if (prev && gone.length) await Promise.all(gone.map((u) => document.querySelector(`.field .card[data-uid="${u}"]`)).filter(Boolean).map((el) => fx.destroy(el)));
+  view = m.view; waiting = false; logLines.push(...(m.log ?? [])); $('lobby').hidden = true; $('game').hidden = false; closeModal('flow'); render();
+  if (prev) for (const [q, id] of [[view.self, 'my-stats'], [1 - view.self, 'opp-stats']]) {
+    const d = prev.players[q].hp - view.players[q].hp, el = $(id).querySelector('.hp');
+    if (d && el) fx.hurt(el, d, { self: q === view.self });
+  }
+}
+// 日志里的 P0 / P1 换成「你 / 对手」
+const fmtLog = (l) => l.replace(/\bP([01])\b/g, (_, d) => (Number(d) === view.self ? '你' : '对手'));
 
 // ---------- 渲染 ----------
 const me = () => view.players[view.self];
@@ -61,8 +77,8 @@ function stats(pl, mine) {
     ${pl.skipPhases ? `<span>还要跳过 ${pl.skipPhases} 个出牌阶段</span>` : ''}${pl.boost ? '<span>下一张宿舍加成 ×3</span>' : ''}
     ${!mine && (typeof pl.hand === 'number' ? pl.hand : pl.hand.length) >= 0 ? `<span>手牌 ${typeof pl.hand === 'number' ? pl.hand : pl.hand.length} 张</span>` : ''}`;
 }
-function cardEl(defId, { cls = '', badge = '', tag = '', onclick } = {}) {
-  const d = document.createElement('div'); d.className = `card ${cls}`; d.dataset.def = defId;
+function cardEl(defId, { cls = '', badge = '', tag = '', onclick, uid } = {}) {
+  const d = document.createElement('div'); d.className = `card ${cls}`; d.dataset.def = defId; if (uid !== undefined) d.dataset.uid = uid;
   d.innerHTML = `<img src="${img(defId)}" alt="${nameOf(defId)}">${badge ? `<span class="x">${badge}</span>` : ''}${tag ? `<span class="tag">${tag}</span>` : ''}`;
   if (onclick) d.onclick = onclick;
   return d;
@@ -73,7 +89,7 @@ function fieldEl(container, pl, ownerSelf) {
   for (const f of pl.field) {
     const by = f.owner === view.self ? '我放的' : '对手放的';
     const extra = [f.roundsLeft ? `剩 ${f.roundsLeft} 回合` : '', f.card.defId === 'XHS-009' ? `${f.count ?? 0}/5` : ''].filter(Boolean).join(' ');
-    container.appendChild(cardEl(f.card.defId, { badge: extra, tag: by }));
+    container.appendChild(cardEl(f.card.defId, { badge: extra, tag: by, uid: f.card.uid }));
   }
 }
 
@@ -105,13 +121,17 @@ function render() {
   $('status').innerHTML = `第 ${view.round} 回合 · 风向 <b>${WIND[view.wind]}</b><br>${phaseText()}${waiting && p.kind !== 'over' ? '<br><i>等待中…</i>' : ''}<br><span id="clock"></span>`;
   $('stack').innerHTML = '';
   const top = view.stack.at(-1); if (top) { $('stack').append('结算中：'); $('stack').appendChild(cardEl(top.card.defId)); }
-  $('log').innerHTML = logLines.slice(-80).map((l) => `<div>${l}</div>`).join(''); $('log').scrollTop = 1e9;
+  $('log').innerHTML = logLines.slice(-80).map((l) => `<div>${fmtLog(l)}</div>`).join(''); $('log').scrollTop = 1e9;
 
   // 手牌
   const hand = $('my-hand'); hand.innerHTML = '';
   for (const c of M.hand) {
     const sup = M.suppressed.includes(c.uid);
-    const el = cardEl(c.defId, { cls: sup ? 'dim' : '', tag: sup ? '被压制' : c.from !== undefined && c.from !== seat ? '对方放入' : '', onclick: () => onHandClick(c) });
+    const h = hintOf(c), acting = myTurnToAct();
+    const el = cardEl(c.defId, { cls: `${sup ? 'dim' : ''} ${acting && h.ok ? 'playable' : ''}`, badge: acting && h.ok ? (h.cost ? `${h.cost} SP` : '免费') : '',
+      tag: sup ? '被压制' : c.from !== undefined && c.from !== seat ? '对方放入' : '', onclick: () => onHandClick(c) });
+    el.dataset.hint = h.ok ? `可以打出 · 需付 ${h.cost} SP${h.note ? ` · ${h.note}` : ''}` : `不能打出：${h.reason}`;
+    if (acting) fx.playable(el, h.ok);
     el.oncontextmenu = (e) => { e.preventDefault(); if (confirm(`弃掉〈${nameOf(c.defId)}〉？`)) act({ type: 'discard', uid: c.uid }); };
     hand.appendChild(el);
   }
@@ -127,6 +147,12 @@ function render() {
 setInterval(() => { const c = $('clock'); if (c && deadline && view?.phase.kind !== 'over') { const s = Math.max(0, Math.ceil((deadline - Date.now() - clockOffset) / 1000)); c.textContent = `倒计时 ${s} 秒`; } }, 250);
 
 // ---------- 出牌 ----------
+const hintOf = (c) => { try { return canPlay(view, view.self, c.uid, { cards: defs }); } catch (e) { return { ok: false, cost: 0, reason: String(e.message ?? e) }; } };
+function myTurnToAct() {
+  const p = ph(); if (waiting) return false;
+  return (p.kind === 'play' && p.active === view.self) || ((p.kind === 'response' || p.kind === 'interject') && p.responder === view.self)
+    || (p.kind === 'select' && p.chooser === view.self && p.reason === 'superman');
+}
 function onHandClick(c) {
   const p = ph(), d = defs[c.defId];
   if (p.kind === 'select' && p.chooser === view.self && p.reason === 'superman') return act({ type: 'give_card', uid: c.uid });
@@ -134,6 +160,7 @@ function onHandClick(c) {
   const canMain = (p.kind === 'play' && p.active === view.self) || (p.kind === 'interject' && p.responder === view.self && p.step === 'play');
   const canResp = p.kind === 'response' && p.responder === view.self;
   if (!canMain && !canResp) return toast('现在不能出这张牌');
+  const h = hintOf(c); if (!h.ok) return toast(`不能打出：${h.reason}`);
   playDialog(c, d, canMain);
 }
 
@@ -209,7 +236,7 @@ function closeModal(kind) { if (kind && modalKind !== kind) return; $('modal').h
 function attachTips() {
   for (const el of document.querySelectorAll('.card')) {
     el.onmouseenter = (e) => { const d = defs[el.dataset.def]; if (!d) return; const t = $('tip');
-      t.innerHTML = `<b>${d.name}</b> · ${TYPE[d.type]} · ${d.x ? `X 费 ${d.x.min}–${d.x.max}` : d.escalating ? '第 n 次用花 n SP' : `${d.cost} SP`}<br>${d.text ?? ''}`; t.hidden = false; };
+      t.innerHTML = `<b>${d.name}</b> · ${TYPE[d.type]} · ${d.x ? `X 费 ${d.x.min}–${d.x.max}` : d.escalating ? '第 n 次用花 n SP' : `${d.cost} SP`}<br>${d.text ?? ''}${el.dataset.hint ? `<br><i>${el.dataset.hint}</i>` : ''}`; t.hidden = false; };
     el.onmousemove = (e) => { const t = $('tip'); t.style.left = Math.min(innerWidth - 270, e.clientX + 14) + 'px'; t.style.top = Math.max(0, e.clientY - 90) + 'px'; };
     el.onmouseleave = () => ($('tip').hidden = true);
   }

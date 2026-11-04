@@ -40,3 +40,5 @@ input { font: inherit; padding: 5px 8px; border-radius: 6px; border: 1px solid #
 .qte { width: 160px; height: 160px; border-radius: 50%; border: 6px solid #567; font-size: 28px; }
 .qte.on { border-color: #ffd86b; background: #ffd86b; }
 .over { font-size: 32px; color: #ffd86b; }
+/* 可出牌高亮（美术的 fx-playable 动效叠在上面） */
+.card.playable { box-shadow: 0 0 0 2px #ffd54a, 0 0 12px 3px rgba(255, 213, 74, .7); cursor: pointer; }

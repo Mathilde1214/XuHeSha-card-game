@@ -27,7 +27,7 @@ const list: CardDef[] = [
   { id: 'XHS-008', name: '老木盾', type: 'defense', cost: 1, escalating: true, variableCost: true, maxPerRound: 2, returnsToHand: true, tags: ['flammable'], effects: [],
     counter: { ...block, onCounter: [dmg(1)] } },                                                            // 每回合最多 2 次；计入 #9 出牌次数
   { id: 'XHS-009', name: '「等成绩的第5天」', type: 'effect', cost: 0, persistent: { zone: 'self' }, effects: [custom('fifth_day')],
-    counter: { ...block, onCounter: [] } },                                                                   // 削弱：仍 0 费，结算时对方 HP-3
+    counter: { ...block, absorb: 1, onCounter: [] } },                                                                   // 削弱：仍 0 费，结算时对方 HP-3
   { id: 'XHS-010', name: 'Math 作业', type: 'attack', cost: 0, x: { min: 0, max: 5 }, variableCost: true, tags: ['flammable'], effects: [{ op: 'damage', target: 'enemy', amount: 'X' }] },
   { id: 'XHS-011', name: '涂改带·真', type: 'defense', cost: 2, effects: [], counter: block },
   { id: 'XHS-012', name: '涂改带', type: 'effect', cost: 2, effects: [] },

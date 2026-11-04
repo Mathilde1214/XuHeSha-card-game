@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { CARDS } from '../src/cards.ts';
-import { apply, createGame, viewFor } from '../src/engine.ts';
+import { apply, canPlay, createGame, viewFor } from '../src/engine.ts';
 import type { Action, GameState, PlayerId } from '../src/types.ts';
 
 const ctx = { cards: CARDS };
@@ -208,4 +208,32 @@ test('#3 进对方手牌后带 from 标记，双方 #3 总数不变', () => {
   s = play(s, A, H(s, A));
   const got = s.players[D].hand.filter((c) => c.defId === 'XHS-003');
   assert.equal(got.length, 2); assert.equal(got.filter((c) => c.from === A).length, 1);
+});
+
+test('#9 响应打出：只抵消 1 点伤害，攻击照常结算（#60 周五 4 伤 → 3）', () => {
+  const fctx = { cards: CARDS, isFriday: true };
+  let { s, A, D } = setup([60], [9]);
+  s = apply(s, { type: 'play', player: A, uid: H(s, A) }, fctx);
+  assert.equal(s.phase.kind, 'response');
+  s = apply(s, { type: 'play', player: D, uid: H(s, D) }, fctx);
+  assert.equal(s.players[D].hp, 4);
+  assert.ok(s.players[D].discard.some((c) => c.defId === 'XHS-009'));
+  assert.ok(s.log.some((l) => l.includes('抵消 1 点伤害') && l.includes('造成 3 点')));
+  assert.equal(s.phase.kind, 'play');
+});
+
+test('canPlay：费用、阶段、响应、压制', () => {
+  let { s, A, D } = setup([59, 7, 23], [7, 29]);
+  s.players[A].sp = 2;
+  assert.deepEqual(canPlay(s, A, H(s, A, 0), ctx), { ok: false, cost: 3, reason: '费用不足：需要 3 SP，当前 2' });
+  assert.equal(canPlay(s, A, H(s, A, 2), ctx).ok, true);
+  assert.equal(canPlay(s, A, H(s, A, 2), ctx).cost, 2);
+  assert.equal(canPlay(s, D, H(s, D, 0), ctx).reason, '不是你的出牌阶段');
+  s = play(s, A, H(s, A, 2));   // 中位数定理，D 有壳 → 响应窗口
+  assert.equal(s.phase.kind, 'response');
+  const v = viewFor(s, D);
+  assert.equal(canPlay(v as any, D, H(s, D, 0), ctx).ok, true);
+  assert.equal(canPlay(v as any, D, H(s, D, 1), ctx).ok, false);
+  s.players[D].suppressed.push(H(s, D, 0));
+  assert.match(canPlay(s, D, H(s, D, 0), ctx).reason!, /压制/);
 });
