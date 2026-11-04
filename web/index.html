@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>续禾杀</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="stylesheet" href="style.css"></head>
+<body>
+<div id="lobby" class="panel">
+  <h1>续禾杀</h1>
+  <div id="lobby-start"><button id="btn-create">建房</button>
+    <span class="or">或</span><input id="in-code" placeholder="6 位房间码" maxlength="6"><button id="btn-join">加入</button></div>
+  <div id="lobby-room" hidden>房间码：<b id="room-code"></b>（把它发给对手，或在另一个标签页加入）<div id="lobby-msg"></div>
+    <div id="faction" hidden>选择你的粽子阵营：<button data-f="sweet">甜粽党</button><button data-f="savory">肉粽党</button></div></div>
+</div>
+<div id="game" hidden>
+  <section id="opp" class="side">
+    <div class="stats" id="opp-stats"></div>
+    <div class="row"><div class="hand-backs" id="opp-hand"></div></div>
+    <div class="field" id="opp-field"></div>
+  </section>
+  <section id="mid">
+    <div id="status"></div>
+    <div id="stack"></div>
+    <div id="log"></div>
+  </section>
+  <section id="me" class="side">
+    <div class="field" id="my-field"></div>
+    <div class="stats" id="my-stats"></div>
+    <div id="actions"></div>
+    <div class="hand" id="my-hand"></div>
+  </section>
+</div>
+<div id="modal" hidden><div class="box" id="modal-box"></div></div>
+<div id="toast"></div>
+<div id="tip" hidden></div>
+<script type="module" src="app.js"></script>
+</body></html>

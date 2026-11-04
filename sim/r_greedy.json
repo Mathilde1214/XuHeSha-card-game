@@ -1,0 +1,13 @@
+file:///workspace/xuhesha/engine/src/engine.ts:343
+      if (a.type !== 'give_card') throw new RuleError('请选一张手牌交给对方');
+                                        ^
+
+RuleError: 请选一张手牌交给对方
+    at apply (file:///workspace/xuhesha/engine/src/engine.ts:343:41)
+    at step (file:///workspace/xuhesha/sim/sim.ts:36:211)
+    at file:///workspace/xuhesha/sim/sim.ts:59:57
+    at ModuleJob.run (node:internal/modules/esm/module_job:561:25)
+    at async node:internal/modules/esm/loader:647:26
+    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+
+Node.js v24.22.1
