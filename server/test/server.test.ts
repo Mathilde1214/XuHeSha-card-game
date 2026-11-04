@@ -114,3 +114,42 @@ test('随机对打：从开局打到胜负，全程不泄露对方手牌', { tim
   assert.equal(leaks, 0);
   a.close(); b.close();
 });
+
+test('同一房间再来一局：断线判负后关页重开接回，双方同意后回到选阵营再开一局', async () => {
+  const { a, b, ra, rb } = await pair();
+  b.close();                                                     // 关掉标签页
+  const over = await a.next((m) => m.t === 'state' && m.view.phase.kind === 'over', 3000);
+  assert.equal(over.view.phase.winner, 0);
+  const b2 = new Client(url); await b2.open();                   // 重新打开：只带浏览器里存的凭证列表
+  b2.send({ t: 'resume', tokens: ['不存在的', ra.token, rb.token] });  // ra 座位在线，应跳过
+  const back = await b2.next((m) => m.t === 'room');
+  assert.equal(back.seat, 1); assert.equal(back.resumed, true); assert.equal(back.opponent.online, true);
+  await b2.next((m) => m.t === 'state' && m.view.phase.kind === 'over');
+  a.send({ t: 'rematch' });
+  assert.deepEqual((await b2.next((m) => m.t === 'rematch')).votes, [true, false]);
+  b2.send({ t: 'rematch' });
+  const lobby = await a.next((m) => m.t === 'lobby' && m.game === 1);
+  assert.equal(lobby.need, 'pick_faction');
+  a.send({ t: 'pick_faction', faction: 'savory' }); b2.send({ t: 'pick_faction', faction: 'sweet' });
+  const s = await a.next((m) => m.t === 'state' && m.view.phase.kind !== 'over');
+  assert.equal(s.view.round, 1);
+  assert.equal(s.log.length > 0 && !s.log.some((l: string) => l.includes('判负')), true);   // 新一局日志从头开始
+  a.close(); b2.close();
+});
+
+test('同一座位在新页面重连会接管旧连接；离开房间后房间关闭', async () => {
+  const { a, b, ra } = await pair();
+  const a2 = new Client(url); await a2.open();
+  a2.send({ t: 'resume', token: ra.token });
+  assert.equal((await a2.next((m) => m.t === 'room')).seat, 0);
+  await a.next((m) => m.t === 'kicked');
+  await a2.next((m) => m.t === 'state');
+  a2.send({ t: 'leave' });
+  await b.next((m) => m.t === 'opponent' && m.left === true);
+  await b.next((m) => m.t === 'state' && m.view.phase.kind === 'over' && m.view.phase.winner === 1);
+  await b.next((m) => m.t === 'room_closed');
+  const a3 = new Client(url); await a3.open();
+  a3.send({ t: 'resume', token: ra.token });
+  assert.equal((await a3.next((m) => m.t === 'reject')).code, 'resume_failed');
+  a2.close(); b.close(); a3.close();
+});

@@ -36,7 +36,7 @@ export function startServer(port = Number(process.env.PORT ?? 8787), timing: Tim
 
   wss.on('connection', (ws: WebSocket & { alive?: boolean }) => {
     let bound: { room: Room; seat: PlayerId } | null = null;
-    const conn = { send: (m: object) => { if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(m)); } };
+    const conn = { send: (m: object) => { if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(m)); }, close: () => { bound = null; ws.close(4000, 'kicked'); } };
     ws.alive = true; ws.on('pong', () => { ws.alive = true; });
 
     ws.on('message', (data) => {
@@ -54,16 +54,23 @@ export function startServer(port = Number(process.env.PORT ?? 8787), timing: Tim
           bound = { room, seat: j.seat }; tokens.set(j.token, bound); return;
         }
         if (msg.t === 'resume') {
-          const b = tokens.get(String(msg.token ?? '')); if (!b || b.room.closed) return conn.send({ t: 'reject', reason: '重连凭证无效或对局已结束' });
-          if (b.room.seats[b.seat]?.conn) return conn.send({ t: 'reject', reason: '该座位已在线' });
+          // token：本标签页自己的凭证，座位在线也直接接管（刷新、换网络）
+          // tokens：浏览器里存过的凭证列表（关掉标签页后重新打开），只接回不在线的座位
+          let b = msg.token ? tokens.get(String(msg.token)) : undefined;
+          if (b?.room.closed) b = undefined;
+          if (!b && Array.isArray(msg.tokens)) {
+            for (const tk of msg.tokens.slice(0, 10)) { const c = tokens.get(String(tk)); if (c && !c.room.closed && !c.room.seats[c.seat]?.conn) { b = c; break; } }
+          }
+          if (!b) return conn.send({ t: 'reject', code: 'resume_failed', reason: '重连凭证无效或房间已关闭' });
           bound = b; b.room.resume(b.seat, conn); return;
         }
         if (msg.t === 'ping') return conn.send({ t: 'pong', serverTime: Date.now() });
         return conn.send({ t: 'reject', reason: '请先建房、加入或重连' });
       }
+      if (bound.room.closed) { bound = null; return conn.send({ t: 'room_closed' }); }
       bound.room.handle(bound.seat, msg);
     });
-    ws.on('close', () => { if (bound && bound.room.seats[bound.seat]?.conn === conn) bound.room.disconnect(bound.seat); });
+    ws.on('close', () => { if (bound && !bound.room.closed && bound.room.seats[bound.seat]?.conn === conn) bound.room.disconnect(bound.seat); });
   });
 
   // 心跳：每 5 秒探一次，连续 10 秒没回应就断开，进入 1 分钟重连期

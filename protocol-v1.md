@@ -63,3 +63,18 @@ WebSocket + JSON `{ t, ... }`；两人好友房，6 位房间码；`action.playe
 - `select` 阶段：`reason:'math_quiz'`（#4）由 `chooser` 发 `{type:'pick', uid?}`，15 秒不选就由服务端发不带 uid 的 `pick`（引擎随机）；`reason:'superman'`（#61）由 `chooser` 发 `give_card`，超时随机给一张。
 - `interject` 阶段（#41）：只有 `responder` 会收到 `timer{phase:'interject'}`，15 秒不操作自动 `pass`。
 - 防泄露：`interject` 窗口打开时，`active` 一方只收到 `waiting`；没开窗口时，新出牌阶段开始的一方同样先收到 `waiting`，随机等 1～3 秒再推状态。等待期间他的操作一律回 `reject{reason:'结算中，请稍候'}`，假等的时间会补到他的 60 秒出牌计时里。
+
+## 附：再来一局与重连（11/04）
+
+客户端 → 服务端：
+- `{t:'resume', token?, tokens?}`：`token` 是本标签页自己的凭证（建议存 sessionStorage），这个座位即使还在线也会直接接管，旧连接会收到 `{t:'kicked'}` 并被断开；`tokens` 是浏览器里存过的凭证列表（建议存 localStorage，最多 10 个，新的在前），只会接回当前**不在线**的座位，适合关掉标签页后重新打开。两种都失败时回 `reject{code:'resume_failed'}`，客户端应清掉凭证、回到大厅。
+- `{t:'rematch', want?:boolean}`：只能在对局结束后发，`want:false` 是取消。
+- `{t:'leave'}`：主动离开房间。对局中离开算判负；房间随即关闭。
+
+服务端 → 客户端：
+- `room` 在重连时多带 `resumed:true`、`game`（第几局，从 0 开始）、`opponent{online,graceUntil}`、`rematch:[bool,bool]`。
+- `{t:'rematch', votes:[bool,bool]}`：谁已经点了再来一局。
+- 双方都点了以后：`{t:'lobby', ready:true, need:'pick_faction', game}`，座位不变，重新选阵营，然后照常收到新一局的 `state`（日志从头开始）。
+- `{t:'opponent', online:false, left:true}`：对手主动离开。
+- `{t:'room_closed'}`：房间已关闭（有人离开、对局结束 10 分钟没人再来一局、或者掉线超过 1 分钟）。
+- `{t:'kicked', reason}`：这个座位在别的页面连上了。

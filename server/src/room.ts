@@ -16,8 +16,8 @@ export const DEFAULT_TIMING: Timing = {
   qteLeadMs: 1_000, qteGapMs: 1_300, qteWindowMs: 600, qteToleranceMs: 150,
 };
 
-export interface Conn { send(msg: object): void }
-interface Seat { token: string; conn: Conn | null; faction?: Faction; logIdx: number; graceTimer?: NodeJS.Timeout }
+export interface Conn { send(msg: object): void; close?(): void }
+interface Seat { token: string; conn: Conn | null; faction?: Faction; logIdx: number; graceTimer?: NodeJS.Timeout; graceUntil?: number }
 
 type Flow =
   | { kind: 'pick'; id: string; seat: PlayerId; action: Action & { type: 'play' }; handles: Map<string, number>; timer: NodeJS.Timeout }
@@ -56,6 +56,9 @@ export class Room {
   private holdState: [boolean, boolean] = [false, false];   // 防泄露：暂不给出牌方推送
   private delayTimer?: NodeJS.Timeout;
   closed = false;
+  game = 0;                                   // 第几局（再来一局 +1）
+  private rematch: [boolean, boolean] = [false, false];
+  private closeTimer?: NodeJS.Timeout;
 
   code: string; timing: Timing; onClose: (r: Room) => void; private seed: number;
   constructor(code: string, timing: Timing = DEFAULT_TIMING, onClose: (r: Room) => void = () => {},
@@ -76,8 +79,12 @@ export class Room {
   }
 
   resume(seat: PlayerId, conn: Conn) {
-    const s = this.seats[seat]!; s.conn = conn; clearTimeout(s.graceTimer); s.graceTimer = undefined;
-    conn.send({ t: 'room', code: this.code, token: s.token, seat });
+    const s = this.seats[seat]!;
+    if (s.conn && s.conn !== conn) { s.conn.send({ t: 'kicked', reason: '你在别的页面重新连上了这个座位' }); s.conn.close?.(); }
+    s.conn = conn; clearTimeout(s.graceTimer); s.graceTimer = undefined;
+    const opp = this.seats[other(seat)];
+    conn.send({ t: 'room', code: this.code, token: s.token, seat, resumed: true, game: this.game,
+      opponent: opp ? { online: !!opp.conn, graceUntil: opp.graceUntil } : null, rematch: this.rematch });
     s.logIdx = 0;
     if (this.state) this.pushState(seat, true);
     if (!this.state && this.seats[0] && this.seats[1]) conn.send({ t: 'lobby', ready: true, need: 'pick_faction' });
@@ -88,7 +95,7 @@ export class Room {
   disconnect(seat: PlayerId) {
     const s = this.seats[seat]; if (!s || this.closed) return;
     s.conn = null;
-    const graceUntil = Date.now() + this.timing.graceMs;
+    const graceUntil = Date.now() + this.timing.graceMs; s.graceUntil = graceUntil;
     this.toSeat(other(seat), { t: 'opponent', online: false, graceUntil });
     s.graceTimer = setTimeout(() => this.forfeit(seat, '掉线超过 1 分钟'), this.timing.graceMs);
   }
@@ -109,6 +116,8 @@ export class Room {
         case 'qte_hit': return this.onQteHit(seat, msg.qteId, msg.round);
         case 'formula': return this.onFormula(seat, msg.qteId, msg.lines);
         case 'hidden_pick_reply': return this.onPick(seat, msg.pickId, msg.handle);
+        case 'rematch': return this.onRematch(seat, msg.want !== false);
+        case 'leave': return this.onLeave(seat);
         case 'ping': return this.toSeat(seat, { t: 'pong', serverTime: Date.now() });
         default: this.toSeat(seat, { t: 'reject', seq: msg?.seq, reason: '未知消息' });
       }
@@ -273,7 +282,10 @@ export class Room {
       this.pushState(p);
     }
     this.scheduleTimers(fake !== null && ph.kind === 'play' && fake === ph.active ? this.busyUntil[fake] - Date.now() : 0);
-    if (ph.kind === 'over') { this.clearAllTimers(); setTimeout(() => this.close(), 5 * 60_000).unref?.(); }
+    if (ph.kind === 'over') {
+      this.clearAllTimers(); this.rematch = [false, false];
+      clearTimeout(this.closeTimer); this.closeTimer = setTimeout(() => this.close(), 10 * 60_000); this.closeTimer.unref?.();
+    }
   }
 
   private isNewPlayPhase(prev: GameState, next: GameState) {
@@ -339,13 +351,40 @@ export class Room {
       console.error('自动处理失败', e);
     }
   }
+  // ---------- 再来一局 / 离开 ----------
+  private onRematch(seat: PlayerId, want: boolean) {
+    if (!this.state || this.state.phase.kind !== 'over') throw new RuleError('对局结束后才能再来一局');
+    if (!this.seats[other(seat)]) throw new RuleError('对手已离开');
+    this.rematch[seat] = want;
+    this.toAll({ t: 'rematch', votes: this.rematch });
+    if (!(this.rematch[0] && this.rematch[1])) return;
+    // 双方都同意：同一个房间、同样的座位，回到选阵营，开新的一局
+    clearTimeout(this.closeTimer); this.clearAllTimers();
+    this.state = null; this.flow = null; this.game++; this.rematch = [false, false];
+    this.seed = randomInt(2 ** 31); this.ctx = { cards: CARDS, isFriday: beijingIsFriday() };
+    this.playKey = ''; this.playRemaining = 0; this.playDeadline = 0; this.phaseDeadline = 0;
+    this.busyUntil = [0, 0]; this.holdState = [false, false];
+    for (const s of this.seats) if (s) { s.faction = undefined; s.logIdx = 0; }
+    this.toAll({ t: 'lobby', ready: true, need: 'pick_faction', game: this.game });
+  }
+
+  private onLeave(seat: PlayerId) {
+    const s = this.seats[seat]!;
+    clearTimeout(s.graceTimer);
+    this.toSeat(other(seat), { t: 'opponent', online: false, left: true });
+    if (this.state && this.state.phase.kind !== 'over') { s.conn = null; this.forfeit(seat, '主动离开'); }
+    s.conn = null;
+    this.close();
+  }
+
   private clearAllTimers() { clearTimeout(this.phaseTimer); clearTimeout(this.delayTimer); if (this.flow) clearTimeout(this.flow.timer); }
 
   // ---------- 发送 ----------
   toSeat(p: PlayerId, msg: object) { this.seats[p]?.conn?.send(msg); }
   toAll(msg: object) { this.toSeat(0, msg); this.toSeat(1, msg); }
   close() {
-    if (this.closed) return; this.closed = true; this.clearAllTimers();
+    if (this.closed) return; this.closed = true; this.clearAllTimers(); clearTimeout(this.closeTimer);
+    this.toAll({ t: 'room_closed' });
     for (const s of this.seats) if (s) clearTimeout(s.graceTimer);
     this.onClose(this);
   }
