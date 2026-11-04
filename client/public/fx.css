@@ -1,0 +1,46 @@
+/* 续禾杀 动效 v1（美术）：可出牌高亮 / 受伤 / 摧毁。纯 CSS，配合 fx.js 使用。 */
+:root { --fx-gold: #ffd86b; --fx-red: #D62828; --fx-blue: #1F3FA8; }
+
+/* 1. 可出牌高亮：卡上加 .fx-playable，金色描边呼吸 + 微微上浮 */
+.card.fx-playable { transform: translateY(-4px); }
+.card.fx-playable img { outline: 3px solid var(--fx-gold); outline-offset: 1px; animation: fx-breathe 1.4s ease-in-out infinite; }
+.card.fx-playable:hover { transform: translateY(-10px); }
+.card.fx-unplayable { filter: grayscale(.6) brightness(.8); }
+.card.fx-unplayable:hover { transform: none; }
+@keyframes fx-breathe {
+  0%,100% { box-shadow: 0 2px 6px #0008, 0 0 0 0 #ffd86b00; }
+  50%     { box-shadow: 0 2px 6px #0008, 0 0 14px 4px #ffd86baa; }
+}
+
+/* 2. 受伤：对 HP 数字或头像区域加 .fx-hurt，抖动 + 红闪；fx.js 额外飘一个 “-N” */
+.fx-hurt { animation: fx-shake .45s cubic-bezier(.36,.07,.19,.97) both, fx-redflash .6s ease-out; }
+@keyframes fx-shake {
+  10%,90% { transform: translateX(-2px); } 20%,80% { transform: translateX(4px); }
+  30%,50%,70% { transform: translateX(-7px); } 40%,60% { transform: translateX(7px); }
+}
+@keyframes fx-redflash { 0% { color: #fff; text-shadow: 0 0 12px var(--fx-red); background-color: #D6282855; } 100% { background-color: transparent; } }
+.fx-float { position: fixed; z-index: 40; pointer-events: none; font: 700 30px "ZCOOL KuaiLe", system-ui, sans-serif;
+  color: var(--fx-red); -webkit-text-stroke: 1px #fff; animation: fx-float 0.9s ease-out forwards; }
+.fx-float.heal { color: #2A9D50; }
+@keyframes fx-float { 0% { transform: translate(-50%, 0) scale(.6); opacity: 0; } 20% { transform: translate(-50%, -10px) scale(1.25); opacity: 1; }
+  100% { transform: translate(-50%, -56px) scale(1); opacity: 0; } }
+/* 全屏边缘红晕（自己受伤时可选） */
+.fx-vignette { position: fixed; inset: 0; pointer-events: none; z-index: 35; box-shadow: inset 0 0 120px 30px #D62828aa; animation: fx-fade .6s ease-out forwards; }
+@keyframes fx-fade { to { opacity: 0; } }
+
+/* 3. 摧毁：卡上加 .fx-destroy，圆珠笔乱划两道 + 揉皱缩小 + 褪色；结束后 fx.js 把元素删掉 */
+.card.fx-destroy { pointer-events: none; animation: fx-crumple .75s .25s ease-in forwards; }
+.card.fx-destroy .fx-scribble { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 2; }
+.card.fx-destroy .fx-scribble path { fill: none; stroke: var(--fx-blue); stroke-width: 6; stroke-linecap: round; stroke-linejoin: round;
+  stroke-dasharray: 600; stroke-dashoffset: 600; animation: fx-draw .25s ease-out forwards; }
+.card.fx-destroy .fx-scribble path:nth-child(2) { animation-delay: .1s; }
+@keyframes fx-draw { to { stroke-dashoffset: 0; } }
+@keyframes fx-crumple {
+  0%   { transform: none; filter: none; opacity: 1; }
+  40%  { transform: scale(.92) rotate(-4deg) skewX(3deg); filter: grayscale(.5); }
+  100% { transform: scale(.2) rotate(18deg) translateY(30px); filter: grayscale(1) blur(1px); opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card.fx-playable img, .fx-hurt, .fx-float, .card.fx-destroy { animation-duration: .01s !important; }
+}

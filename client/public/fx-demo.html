@@ -1,0 +1,19 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>续禾杀 动效预览</title>
+<link rel="stylesheet" href="style.css"><link rel="stylesheet" href="fx.css">
+<style>body{padding:24px} .row{display:flex;gap:10px;margin:14px 0;align-items:flex-end}</style></head><body>
+<h2>动效预览</h2>
+<div class="stats" id="st"><span>HP <b class="hp" id="hp">7</b>/7</span><span>SP <b>3</b></span></div>
+<div class="row" id="hand"></div>
+<button id="b1">切换可出牌高亮</button><button id="b2">受伤 -2</button><button id="b3">自己受伤 -1（带红晕）</button><button id="b4">治疗 +1</button><button id="b5">摧毁最后一张</button>
+<script type="module">
+import { fx } from './fx.js';
+const ids=['XHS-001','XHS-025','XHS-058','XHS-015','XHS-036'];
+const hand=document.getElementById('hand');
+const mk=()=>{hand.innerHTML='';ids.forEach(i=>{const d=document.createElement('div');d.className='card';d.innerHTML=`<img src="cards/${i}.jpg">`;hand.appendChild(d);});};
+mk(); let on=false; const hp=document.getElementById('hp'); let v=7;
+b1.onclick=()=>{on=!on;[...hand.children].forEach((c,i)=>on?fx.playable(c,i%2===0):c.classList.remove('fx-playable','fx-unplayable'));};
+b2.onclick=()=>{v=Math.max(0,v-2);hp.textContent=v;fx.hurt(hp,2);};
+b3.onclick=()=>{v=Math.max(0,v-1);hp.textContent=v;fx.hurt(hp,1,{self:true});};
+b4.onclick=()=>{v=Math.min(7,v+1);hp.textContent=v;fx.hurt(hp,-1);};
+b5.onclick=async()=>{const c=hand.lastElementChild; if(!c){mk();return;} await fx.destroy(c);};
+</script></body></html>
