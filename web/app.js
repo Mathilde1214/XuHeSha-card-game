@@ -19,29 +19,57 @@ function toast(msg) { const t = $('toast'); t.textContent = msg; t.style.display
 function send(m) { ws?.readyState === 1 && ws.send(JSON.stringify(m)); }
 function act(action) { send({ t: 'action', seq: seq++, action }); }
 
-// ---------- 连接 ----------
+// ---------- 连接 / 重连 ----------
+// 凭证存两份：sessionStorage 是本标签页的（刷新后直接接管座位），
+// localStorage 里存最近 10 个（关掉标签页再打开时，服务端只接回不在线的座位，两个标签页本地对打也不会抢座）
+const TK = 'xhs-token', TKS = 'xhs-tokens';
+const tokenList = () => { try { return JSON.parse(localStorage.getItem(TKS) ?? '[]'); } catch { return []; } };
+function saveToken(tk) { sessionStorage.setItem(TK, tk); localStorage.setItem(TKS, JSON.stringify([tk, ...tokenList().filter((x) => x !== tk)].slice(0, 10))); }
+function dropToken(tk = sessionStorage.getItem(TK)) { sessionStorage.removeItem(TK); if (tk) localStorage.setItem(TKS, JSON.stringify(tokenList().filter((x) => x !== tk))); }
+let kicked = false, lostAt = 0, rematchVotes = [false, false], oppLeft = false;
 function connect() {
   ws = new WebSocket(WS_URL);
-  ws.onopen = () => { const tk = sessionStorage.getItem('xhs-token'); if (tk) send({ t: 'resume', token: tk, lastVer: 0 }); send({ t: 'ping' }); };
+  ws.onopen = () => {
+    if (lostAt) { toast('已重新连上服务器'); lostAt = 0; }
+    const tk = sessionStorage.getItem(TK), list = tokenList();
+    if (tk || list.length) send({ t: 'resume', token: tk ?? undefined, tokens: list });
+    send({ t: 'ping' });
+  };
   ws.onmessage = (e) => onMsg(JSON.parse(e.data));
-  ws.onclose = () => { toast('和服务器断开，3 秒后重连'); setTimeout(connect, 3000); };
+  ws.onclose = () => {
+    if (kicked) return;
+    if (!lostAt) { lostAt = Date.now(); toast('和服务器断开，正在重连…（1 分钟内连回来可以接着打）'); }
+    setTimeout(connect, 1500);
+  };
+}
+function backToLobby(msg) {
+  view = null; seat = null; waiting = false; deadline = 0; logLines.length = 0; rematchVotes = [false, false]; oppLeft = false;
+  closeModal(); $('game').hidden = true; $('lobby').hidden = false; $('lobby-start').hidden = false; $('lobby-room').hidden = true; $('faction').hidden = true;
+  if (msg) toast(msg);
 }
 setInterval(() => send({ t: 'ping' }), 8000);
 
 function onMsg(m) {
   switch (m.t) {
     case 'pong': clockOffset = m.serverTime - Date.now(); break;
-    case 'room': seat = m.seat; sessionStorage.setItem('xhs-token', m.token); $('lobby-start').hidden = true; $('lobby-room').hidden = false;
-      $('room-code').textContent = m.code; $('lobby-msg').textContent = `你是 ${m.seat + 1} 号位，等待对手加入…`; break;
-    case 'lobby': $('lobby-msg').textContent = '双方都到了，请选阵营'; $('faction').hidden = false; break;
+    case 'room': seat = m.seat; saveToken(m.token); $('lobby-start').hidden = true; $('lobby-room').hidden = false;
+      $('room-code').textContent = m.code; $('lobby-msg').textContent = `你是 ${m.seat + 1} 号位，等待对手加入…`;
+      if (m.resumed) { rematchVotes = m.rematch ?? [false, false]; if (m.opponent && !m.opponent.online) toast('对手现在不在线，等他重连'); }
+      break;
+    case 'lobby':
+      if (m.game) { view = null; waiting = false; deadline = 0; logLines.length = 0; rematchVotes = [false, false]; closeModal(); $('game').hidden = true; $('lobby').hidden = false; $('lobby-start').hidden = true; $('lobby-room').hidden = false; }
+      $('lobby-msg').textContent = m.game ? `第 ${m.game + 1} 局：请重新选阵营` : '双方都到了，请选阵营'; $('faction').hidden = false; break;
+    case 'rematch': rematchVotes = m.votes; if (m.votes[1 - seat] && !m.votes[seat]) toast('对手想再来一局'); if (view) render(); break;
+    case 'room_closed': dropToken(); backToLobby(oppLeft ? '对手离开了，房间已关闭' : '房间已关闭'); break;
+    case 'kicked': kicked = true; dropToken(); backToLobby(); $('lobby-start').hidden = true; $('lobby-room').hidden = false; $('lobby-msg').textContent = '这个座位已经在别的页面打开了，这个页面不再连接。'; break;
     case 'ack': if (m.what === 'pick_faction') { $('faction').hidden = true; $('lobby-msg').textContent = '已选阵营，等待对手…'; } break;
     case 'reject':
-      if (/重连凭证/.test(m.reason ?? '')) { sessionStorage.removeItem('xhs-token'); break; }
+      if (m.code === 'resume_failed') { const had = sessionStorage.getItem(TK); dropToken(); localStorage.removeItem(TKS); if (view || had) backToLobby('原来的房间已经关闭了'); break; }
       toast(m.reason ?? '操作被拒绝'); break;
     case 'state': stateChain = stateChain.then(() => onState(m)).catch((e) => console.error(e)); break;
     case 'waiting': waiting = true; render(); break;
     case 'timer': deadline = m.deadline; timerPhase = m.phase; break;
-    case 'opponent': toast(m.online ? '对手已重新连上' : '对手掉线了，1 分钟内没回来判负'); break;
+    case 'opponent': if (m.left) { oppLeft = true; toast('对手离开了房间'); } else toast(m.online ? '对手已重新连上' : '对手掉线了，1 分钟内没回来判负'); break;
     case 'hidden_pick': return hiddenPick(m);
     case 'qte_start': return qte(m);
     case 'formula_start': return formula(m);
@@ -141,7 +169,11 @@ function render() {
   if (p.kind === 'play' && p.active === view.self) btn('结束阶段', () => act({ type: 'end_phase' }));
   if ((p.kind === 'response' || p.kind === 'interject') && p.responder === view.self) btn('放弃', () => act({ type: 'pass' }), 'ghost');
   if (p.kind === 'select' && p.chooser === view.self && p.reason === 'math_quiz') mathQuiz(p);
-  if (p.kind === 'over') btn('再来一局', () => { sessionStorage.removeItem('xhs-token'); location.reload(); });
+  if (p.kind === 'over') {
+    const mine = rematchVotes[view.self], theirs = rematchVotes[1 - view.self];
+    if (!oppLeft) btn(mine ? '已申请再来一局，等对手确认（点击取消）' : theirs ? '对手想再来一局：同意' : '再来一局', () => send({ t: 'rematch', want: !mine }), mine ? 'ghost' : '');
+    btn('离开房间', () => { send({ t: 'leave' }); dropToken(); backToLobby(); }, 'ghost');
+  } else btn('认输离开', () => { if (confirm('现在离开算认输，确定吗？')) { send({ t: 'leave' }); dropToken(); backToLobby(); } }, 'ghost');
   attachTips();
 }
 setInterval(() => { const c = $('clock'); if (c && deadline && view?.phase.kind !== 'over') { const s = Math.max(0, Math.ceil((deadline - Date.now() - clockOffset) / 1000)); c.textContent = `倒计时 ${s} 秒`; } }, 250);
@@ -243,8 +275,8 @@ function attachTips() {
 }
 
 // ---------- 大厅 ----------
-$('btn-create').onclick = () => { sessionStorage.removeItem('xhs-token'); send({ t: 'create_room' }); };
-$('btn-join').onclick = () => { sessionStorage.removeItem('xhs-token'); send({ t: 'join_room', code: $('in-code').value.trim() }); };
+$('btn-create').onclick = () => { sessionStorage.removeItem(TK); send({ t: 'create_room' }); };
+$('btn-join').onclick = () => { sessionStorage.removeItem(TK); send({ t: 'join_room', code: $('in-code').value.trim() }); };
 for (const b of document.querySelectorAll('#faction button')) b.onclick = () => send({ t: 'pick_faction', faction: b.dataset.f });
 
 window.__xhs = { get view() { return view; }, get ws() { return ws; } };   // 联调/自动测试用
