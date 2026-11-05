@@ -1,34 +1,79 @@
 <!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><title>续禾杀</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<link rel="stylesheet" href="style.css"><link rel="stylesheet" href="fx.css"></head>
+<link rel="stylesheet" href="fx.css"><link rel="stylesheet" href="style.css"></head>
 <body>
-<div id="lobby" class="panel">
-  <h1>续禾杀</h1>
-  <div id="lobby-start"><button id="btn-create">建房</button>
-    <span class="or">或</span><input id="in-code" placeholder="6 位房间码" maxlength="6"><button id="btn-join">加入</button></div>
-  <div id="lobby-room" hidden>房间码：<b id="room-code"></b>（把它发给对手，或在另一个标签页加入）<div id="lobby-msg"></div>
-    <div id="faction" hidden>选择你的粽子阵营：<button data-f="sweet">甜粽党</button><button data-f="savory">肉粽党</button></div></div>
-</div>
+<main id="lobby" class="lobby-notebook">
+  <header class="lobby-heading">
+    <h1>续禾杀<img src="icons/icon_hp.png" alt="" class="lobby-heart"></h1>
+    <p class="lobby-tagline">课间，来一局。</p>
+    <p class="lobby-subtitle"><span>双人卡牌对战</span></p>
+  </header>
+  <div id="lobby-start" class="lobby-entry">
+    <div class="lobby-card-fan" aria-label="续禾杀原版手绘卡牌">
+      <img class="fan-back" src="cards/card_back.jpg" alt="续禾杀卡背">
+      <img class="fan-cat" src="cards/XHS-025.jpg" alt="林广秦原卡">
+      <img class="fan-book" src="cards/XHS-001.jpg" alt="小绿原卡">
+    </div>
+    <section class="lobby-entry-sheet taped-paper">
+      <h2>开一间新房</h2>
+      <p>叫上朋友，开始这场课间对决。</p>
+      <button id="btn-create" class="lobby-primary">创建房间</button>
+      <form id="join-form">
+        <h2><label for="in-code">已有房间码？</label></h2>
+        <input id="in-code" placeholder="输入 6 位房间码" inputmode="numeric" autocomplete="off" pattern="[0-9]{6}" maxlength="6" required aria-describedby="join-hint">
+        <span id="join-hint" class="sr-only">请输入朋友发给你的六位数字房间码</span>
+        <button id="btn-join" class="ghost" type="submit">加入房间</button>
+      </form>
+    </section>
+    <p class="lobby-entry-note">两人加入并选择阵营后，即可开局</p>
+  </div>
+  <section id="lobby-room" class="lobby-waiting" hidden>
+    <div class="room-ticket taped-paper">
+      <h2 id="room-heading">房间已创建</h2>
+      <b id="room-code" aria-label="房间码"></b>
+      <button id="btn-copy-code" class="lobby-primary">复制房间码</button>
+      <p>把房间码发给朋友，邀请他加入。</p>
+    </div>
+    <div class="lobby-seats">
+      <div class="lobby-seat"><span class="seat-avatar" aria-hidden="true">我</span><b id="lobby-self-label">我 · 已加入</b></div>
+      <div class="lobby-seat" id="friend-seat"><span class="seat-avatar empty" aria-hidden="true">?</span><b id="lobby-friend-label">好友 · 等待加入</b></div>
+    </div>
+    <p id="lobby-msg" role="status">等待好友加入…</p>
+    <p id="lobby-wait-hint" class="muted">好友加入后，双方选择粽子阵营</p>
+    <div id="faction" hidden><h2>选一个你的粽子阵营</h2><p class="muted">本局阵营确定后不再更改</p><div class="faction-options"><button data-f="sweet">甜粽党</button><button data-f="savory" class="ghost">肉粽党</button></div></div>
+    <button id="btn-lobby-back" class="ghost">← 返回大厅</button>
+  </section>
+  <footer class="lobby-footer"><span>把课间的故事，变成手里的牌。</span><button id="btn-lobby-rules" class="ghost">规则</button></footer>
+</main>
 <div id="game" hidden>
-  <section id="opp" class="side">
-    <div class="stats" id="opp-stats"></div>
-    <div class="row"><div class="hand-backs" id="opp-hand"></div></div>
-    <div class="field" id="opp-field"></div>
-  </section>
-  <section id="mid">
-    <div id="status"></div>
-    <div id="stack"></div>
-    <div id="log"></div>
-  </section>
-  <section id="me" class="side">
-    <div class="field" id="my-field"></div>
-    <div class="stats" id="my-stats"></div>
+  <header class="game-header"><div class="brand">续禾杀 <span>课间，来一局。</span></div><b id="round-label" class="paper-label"></b><button id="btn-rules" class="ghost">规则</button></header>
+  <main class="tabletop">
+    <section id="opp" class="side">
+      <div class="stats" id="opp-stats"></div>
+      <div class="hand-backs" id="opp-hand" aria-label="对手手牌"></div>
+      <div class="piles" id="opp-piles"></div>
+      <div class="field" id="opp-field"></div>
+    </section>
+    <section id="mid">
+      <div id="status" aria-live="polite"></div>
+      <div id="stack"></div>
+      <div id="preview"><img id="preview-image" hidden alt=""><span id="preview-empty">续禾杀<span>把鼠标移到卡牌上，查看原卡</span></span></div>
+    </section>
+    <section id="me" class="side">
+      <div class="field" id="my-field"></div>
+      <div class="player-corner"><div class="piles" id="my-piles"></div><div class="stats" id="my-stats"></div></div>
+      <div class="hand-area"><span id="hand-count" class="paper-label"></span><div class="hand" id="my-hand"></div></div>
+    </section>
+  </main>
+  <aside class="notebook-sidebar">
+    <section class="detail-panel"><h2 class="paper-label">卡牌详情</h2><div id="card-detail"><p class="muted">悬停或聚焦卡牌查看详情</p></div></section>
+    <section class="log-panel"><h2 class="paper-label">对局记录</h2><div id="log" role="log"></div></section>
     <div id="actions"></div>
-    <div class="hand" id="my-hand"></div>
-  </section>
+  </aside>
 </div>
 <div id="modal" hidden><div class="box" id="modal-box"></div></div>
+<div id="card-reader" hidden role="dialog" aria-modal="true" aria-labelledby="reader-title"><div class="reader-box"><button id="reader-close" class="ghost">关闭卡牌</button><img id="reader-image" alt=""><h2 id="reader-title"></h2><p id="reader-text"></p></div></div>
 <div id="toast"></div>
 <div id="tip" hidden></div>
 <script type="module" src="app.js"></script>
