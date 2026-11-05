@@ -355,7 +355,26 @@ export function apply(state: GameState, a: Action, ctx: Ctx): GameState {
   if (ph.kind === 'over') throw new RuleError('对局已结束');
   const pl = s.players[a.player];
 
-  if (a.type === 'discard') { pl.discard.push(takeFromHand(pl, a.uid)); return s; } // 随时可弃（A4）
+  if (a.type === 'discard') {
+    pl.discard.push(takeFromHand(pl, a.uid)); // 随时可弃（A4）
+    if (ph.kind === 'select' && ph.reason === 'superman' && ph.chooser === a.player && !pl.hand.length) {
+      s.pending = undefined;
+      if (s.stack.at(-1)?.deferred) settle(s, s.stack.pop()!, ctx);
+      resume(s, ph.active);
+    }
+    return s;
+  }
+  // 在入栈前校验，不能等到响应结束后才发现选项无效。
+  if (a.type === 'play') {
+    for (const uid of [a.uid, a.withUid]) {
+      const card = pl.hand.find((c) => c.uid === uid);
+      if (!card) continue;
+      for (const e of ctx.cards[card.defId].effects) if (e.op === 'choice') {
+        if (typeof a.choice !== 'number' || !Number.isInteger(a.choice) || a.choice < 0 || a.choice >= e.options.length)
+          throw new RuleError('无效的选项');
+      }
+    }
+  }
 
   if (ph.kind === 'select') {
     if (a.player !== ph.chooser) throw new RuleError('现在不是你选牌');
@@ -405,7 +424,9 @@ export function apply(state: GameState, a: Action, ctx: Ctx): GameState {
       if (def.x) baseCost(pl, def, a.x); // 免费只免 SP，X 仍需合法
       takeFromHand(pl, a.uid); tickFifthDay(s);
       s.log.push(`P${a.player} 免费打出 ${def.name}（先于 ${ctx.cards[top.card.defId].name} 结算）`);
-      settle(s, { card, owner: a.player, x: a.x, choice: a.choice, qteHits: a.qteHits, targetUid: a.targetUid, wind: a.wind, formulaOk: a.formulaOk }, ctx);
+      const mult = dormMult(s, a.player, def, pl.boost); pl.boost = false;
+      markUsed(pl, def);
+      settle(s, { card, owner: a.player, x: a.x, choice: a.choice, qteHits: a.qteHits, targetUid: a.targetUid, wind: a.wind, formulaOk: a.formulaOk, mult }, ctx);
       if (s.pending) { top.deferred = true; resume(s, ph.active); return s; }   // 免费牌要选牌：先选完，再结算 #62/#63
       settle(s, s.stack.pop()!, ctx);
       resume(s, ph.active);
@@ -415,7 +436,9 @@ export function apply(state: GameState, a: Action, ctx: Ctx): GameState {
     if (ph.free) { checkPlayable(pl, def, card.uid); takeFromHand(pl, a.uid); markUsed(pl, def); }
     else { pay(pl, def, a.x, card.uid); takeFromHand(pl, a.uid); }
     tickFifthDay(s);
-    const resp: StackItem = { card, owner: a.player, x: a.x, choice: a.choice, qteHits: a.qteHits };
+    const resp: StackItem = { card, owner: a.player, x: a.x, choice: a.choice, qteHits: a.qteHits,
+      mult: dormMult(s, a.player, def, pl.boost) };
+    pl.boost = false;
     const tname = ctx.cards[top.card.defId].name, pl2 = s.players[a.player];
     applyEffects(s, def.counter!.onCounter ?? [], resp, ctx);
     if (def.counter!.absorb) {   // #9：只抵消 N 点伤害，攻击照常结算

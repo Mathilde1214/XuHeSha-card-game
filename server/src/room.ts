@@ -152,8 +152,14 @@ export class Room {
 
     if (action.type === 'play') {
       const def = this.comboDef(seat, action);
-      const pickKey = customKeys(def).find((k) => HIDDEN_PICK[k]);
-      if (pickKey) delete (action as any).targetUid;                         // 对方手牌只能走一次性编号
+      let pickKey = customKeys(def).find((k) => HIDDEN_PICK[k]);
+      if (pickKey) {
+        const field = this.state.players[other(seat)].field.find((f) => f.card.uid === action.targetUid);
+        const publicTarget = field && (field.card.defId === 'XHS-009' || // #15 / #18 都是攻击，包括与 #67 的组合
+          (pickKey === 'burn_flammable' && CARDS[field.card.defId].tags?.includes('flammable')));
+        if (publicTarget) pickKey = undefined;
+        else delete action.targetUid; // 手牌仍只能走一次性编号
+      }
       if (hasOp(def, 'choice') && action.choice === undefined) throw new RuleError('这张牌要先选一个选项');
       apply(this.state, { ...action, qteHits: 0 }, this.ctx);               // 试结算：费用、时机不合法直接拒绝，不进判定
       this.toSeat(seat, { t: 'ack', seq });
@@ -167,6 +173,10 @@ export class Room {
   }
 
   private afterPick(seat: PlayerId, action: Action & { type: 'play' }, def: CardDef) {
+    const card = this.state!.players[seat].hand.find((c) => c.uid === action.uid);
+    if (this.state!.phase.kind === 'response' && card?.defId === 'XHS-005' && this.state!.stack.at(-1)?.card.defId === 'XHS-004') {
+      this.commitState(apply(this.state!, action, this.ctx), { seat, action }); return;
+    }
     if (customKeys(def).includes('physics_formulas')) return this.startFormula(seat, action);
     if (hasOp(def, 'qte')) return this.startQte(seat, action);
     this.commitState(apply(this.state!, action, this.ctx), { seat, action });

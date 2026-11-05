@@ -1,8 +1,8 @@
 // 网页客户端的静态服务：client/public + /cards.json（引擎卡表 + cards-v2.csv 的「游戏内说明」）
 import { createServer } from 'node:http';
 import { readFileSync, existsSync, statSync } from 'node:fs';
-import { join, extname, normalize } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join, extname, normalize, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { CARDS } from '../engine/src/cards.ts';
 
 const ROOT = fileURLToPath(new URL('./public/', import.meta.url));
@@ -41,4 +41,4 @@ export function startClient(port = Number(process.env.CLIENT_PORT ?? 5173)) {
   srv.listen(port, process.env.HOST ?? '127.0.0.1');
   return srv;
 }
-if (import.meta.url === `file://${process.argv[1]}`) { startClient(); console.log('客户端：http://127.0.0.1:' + (process.env.CLIENT_PORT ?? 5173)); }
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) { startClient(); console.log('客户端：http://127.0.0.1:' + (process.env.CLIENT_PORT ?? 5173)); }

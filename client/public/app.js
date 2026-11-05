@@ -43,6 +43,7 @@ function connect() {
   };
 }
 function backToLobby(msg) {
+  stateEpoch++; stateChain = Promise.resolve();
   view = null; seat = null; waiting = false; deadline = 0; logLines.length = 0; rematchVotes = [false, false]; oppLeft = false;
   closeModal(); $('game').hidden = true; $('lobby').hidden = false; $('lobby-start').hidden = false; $('lobby-room').hidden = true; $('faction').hidden = true;
   if (msg) toast(msg);
@@ -52,11 +53,12 @@ setInterval(() => send({ t: 'ping' }), 8000);
 function onMsg(m) {
   switch (m.t) {
     case 'pong': clockOffset = m.serverTime - Date.now(); break;
-    case 'room': seat = m.seat; saveToken(m.token); $('lobby-start').hidden = true; $('lobby-room').hidden = false;
+    case 'room': stateEpoch++; stateChain = Promise.resolve(); seat = m.seat; saveToken(m.token); $('lobby-start').hidden = true; $('lobby-room').hidden = false;
       $('room-code').textContent = m.code; $('lobby-msg').textContent = `你是 ${m.seat + 1} 号位，等待对手加入…`;
       if (m.resumed) { rematchVotes = m.rematch ?? [false, false]; if (m.opponent && !m.opponent.online) toast('对手现在不在线，等他重连'); }
       break;
     case 'lobby':
+      if (m.game) { stateEpoch++; stateChain = Promise.resolve(); }
       if (m.game) { view = null; waiting = false; deadline = 0; logLines.length = 0; rematchVotes = [false, false]; closeModal(); $('game').hidden = true; $('lobby').hidden = false; $('lobby-start').hidden = true; $('lobby-room').hidden = false; }
       $('lobby-msg').textContent = m.game ? `第 ${m.game + 1} 局：请重新选阵营` : '双方都到了，请选阵营'; $('faction').hidden = false; break;
     case 'rematch': rematchVotes = m.votes; if (m.votes[1 - seat] && !m.votes[seat]) toast('对手想再来一局'); if (view) render(); break;
@@ -66,7 +68,7 @@ function onMsg(m) {
     case 'reject':
       if (m.code === 'resume_failed') { const had = sessionStorage.getItem(TK); dropToken(); localStorage.removeItem(TKS); if (view || had) backToLobby('原来的房间已经关闭了'); break; }
       toast(m.reason ?? '操作被拒绝'); break;
-    case 'state': stateChain = stateChain.then(() => onState(m)).catch((e) => console.error(e)); break;
+    case 'state': { const epoch = stateEpoch; stateChain = stateChain.then(() => onState(m, epoch)).catch((e) => console.error(e)); break; }
     case 'waiting': waiting = true; render(); break;
     case 'timer': deadline = m.deadline; timerPhase = m.phase; break;
     case 'opponent': if (m.left) { oppLeft = true; toast('对手离开了房间'); } else toast(m.online ? '对手已重新连上' : '对手掉线了，1 分钟内没回来判负'); break;
@@ -80,10 +82,13 @@ function onMsg(m) {
 
 // 新状态：先给消失的效果区牌播摧毁动画，再重绘；HP 变化在重绘后播受伤 / 治疗
 let stateChain = Promise.resolve();
+let stateEpoch = 0; // 离开、重连或新一局后，旧状态与未完成动画不再更新页面
 const fieldUids = (v) => new Set(v ? v.players.flatMap((pl) => pl.field.map((f) => f.card.uid)) : []);
-async function onState(m) {
+async function onState(m, epoch) {
+  if (epoch !== stateEpoch) return;
   const prev = view, gone = [...fieldUids(prev)].filter((u) => !fieldUids(m.view).has(u));
   if (prev && gone.length) await Promise.all(gone.map((u) => document.querySelector(`.field .card[data-uid="${u}"]`)).filter(Boolean).map((el) => fx.destroy(el)));
+  if (epoch !== stateEpoch) return;
   view = m.view; waiting = false; logLines.push(...(m.log ?? [])); $('lobby').hidden = true; $('game').hidden = false; closeModal('flow'); render();
   if (prev) for (const [q, id] of [[view.self, 'my-stats'], [1 - view.self, 'opp-stats']]) {
     const d = prev.players[q].hp - view.players[q].hp, el = $(id).querySelector('.hp');
@@ -192,8 +197,12 @@ function onHandClick(c) {
   const canMain = (p.kind === 'play' && p.active === view.self) || (p.kind === 'interject' && p.responder === view.self && p.step === 'play');
   const canResp = p.kind === 'response' && p.responder === view.self;
   if (!canMain && !canResp) return toast('现在不能出这张牌');
-  const h = hintOf(c); if (!h.ok) return toast(`不能打出：${h.reason}`);
-  playDialog(c, d, canMain);
+  const h = hintOf(c);
+  const discount = canMain && !d.variableCost && !d.x && d.id !== 'XHS-067'
+    ? me().hand.find((m) => m.defId === 'XHS-067' && hintOf(m).ok) : undefined;
+  const discounted = discount && canPlay({ ...view, players: view.players.map((pl, i) => i === view.self ? { ...pl, sp: pl.sp + 2 } : pl) }, view.self, c.uid, { cards: defs });
+  if (!h.ok && !discounted?.ok) return toast(`不能打出：${h.reason}`);
+  playDialog(c, d, canMain, !h.ok ? discount.uid : undefined);
 }
 
 const hasOp = (effs, op) => effs.some((e) => e.op === op || (e.op === 'choice' && e.options.some((o) => hasOp(o, op))) || (e.then && hasOp(e.then, op)));
@@ -202,13 +211,14 @@ function descEffects(list) {
   return list.map((e) => e.op === 'draw' ? `抽 ${e.count} 张` : e.op === 'damage' ? `${e.target === 'self' ? '自己' : '对方'} HP-${e.amount}` : e.op === 'heal' ? `HP+${e.amount}` : e.op === 'sp' ? `SP${e.delta > 0 ? '+' : ''}${e.delta}` : e.op).join('，');
 }
 
-function playDialog(c, d, main) {
+function playDialog(c, d, main, selectedMate) {
   const M = me(), O = opp();
   const choice = d.effects.find((e) => e.op === 'choice');
   const needWind = custom(d, 'change_wind');
   const fieldTargets = [];
   if (custom(d, 'remove_from_my_zone')) for (const f of M.field) if (f.owner !== view.self) fieldTargets.push(f);
   if (d.type === 'attack') for (const f of O.field) if (f.card.defId === 'XHS-009') fieldTargets.push(f);
+  if (custom(d, 'burn_flammable')) for (const f of O.field) if (defs[f.card.defId].tags?.includes('flammable') && !fieldTargets.includes(f)) fieldTargets.push(f);
   const mates = main ? M.hand.filter((h) => h.uid !== c.uid && (
     (COMBOS[d.id] ?? []).includes(h.defId) || (COMBOS[h.defId] ?? []).includes(d.id) ||
     (h.defId === 'XHS-067' && !d.variableCost && !d.x) || (d.id === 'XHS-067' && !HELPERS.has(h.defId) && !defs[h.defId].variableCost && !defs[h.defId].x))) : [];
@@ -222,6 +232,13 @@ function playDialog(c, d, main) {
   if (mates.length) html += `<label>同时打出：<select id="f-with"><option value="">不组合</option>${mates.map((h) => `<option value="${h.uid}">${nameOf(h.defId)}</option>`).join('')}</select></label>`;
   html += `<div><button id="f-ok">打出</button><button class="ghost" id="f-cancel">取消</button></div>`;
   openModal(html, 'dialog');
+  if (mates.length) {
+    if (selectedMate !== undefined) $('f-with').value = String(selectedMate);
+    $('f-with').onchange = () => {
+      const mate = mates.find((m) => String(m.uid) === $('f-with').value);
+      if (mate && HELPERS.has(d.id) && !HELPERS.has(mate.defId)) playDialog(mate, defs[mate.defId], main, c.uid);
+    };
+  }
   $('f-cancel').onclick = () => closeModal();
   $('f-ok').onclick = () => {
     const a = { type: 'play', uid: c.uid };
