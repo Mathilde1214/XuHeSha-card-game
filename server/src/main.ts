@@ -18,7 +18,9 @@ export function startServer(port = Number(process.env.PORT ?? 8787), timing: Tim
   const tokens = new Map<string, { room: Room; seat: PlayerId }>();
   // 同一个端口：HTTP 发网页和卡面图，WebSocket 走 /ws
   const http = createServer(async (req, res) => {
-    const path = decodeURIComponent(new URL(req.url ?? '/', 'http://x').pathname);
+    let path: string;
+    try { path = decodeURIComponent(new URL(req.url ?? '/', 'http://x').pathname); }
+    catch { res.writeHead(400, { 'content-type': 'text/plain; charset=utf-8' }); res.end('无效的 URL'); return; }
     for (const [prefix, dir] of STATIC) {
       if (!path.startsWith(prefix)) continue;
       let file = normalize(join(dir, path.slice(prefix.length) || 'index.html'));
@@ -41,6 +43,8 @@ export function startServer(port = Number(process.env.PORT ?? 8787), timing: Tim
 
     ws.on('message', (data) => {
       let msg: any; try { msg = JSON.parse(String(data)); } catch { return conn.send({ t: 'reject', reason: '不是合法 JSON' }); }
+      if (!msg || typeof msg !== 'object' || Array.isArray(msg) || typeof msg.t !== 'string')
+        return conn.send({ t: 'reject', reason: '消息格式不对' });
       if (!bound) {
         if (msg.t === 'create_room') {
           const room = new Room(newCode(), timing, (r) => { rooms.delete(r.code); for (const s of r.seats) if (s) tokens.delete(s.token); });

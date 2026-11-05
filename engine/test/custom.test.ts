@@ -19,6 +19,23 @@ function setup(a: number[], d: number[], factions: ['sweet' | 'savory', 'sweet' 
 const play = (s: GameState, p: PlayerId, uid: number, extra: Partial<Extract<Action, { type: 'play' }>> = {}) => apply(s, { type: 'play', player: p, uid, ...extra }, ctx);
 const H = (s: GameState, p: PlayerId, i = 0) => s.players[p].hand[i].uid;
 
+test('X 费用只接受范围内整数，普通和免费出牌均校验', () => {
+  for (const free of [false, true]) {
+    let { s, A, D } = setup(free ? [62] : [10], free ? [10] : []);
+    if (free) s = play(s, A, H(s, A));
+    const p = free ? D : A;
+    const before = structuredClone(s);
+    for (const x of [undefined, null, 'bad', '2', NaN, Infinity, -1, 6, 1.5]) {
+      assert.throws(() => play(s, p, H(s, p), { x: x as number }), /X 需/);
+      assert.deepEqual(s, before);
+    }
+    for (const x of [0, 5]) {
+      const next = play(s, p, H(s, p), { x });
+      assert.ok(next.players.every((pl) => Number.isFinite(pl.hp) && Number.isFinite(pl.sp)));
+    }
+  }
+});
+
 test('#3 流血：对方手牌+效果区的金属牌各 1 伤，本牌进对方手牌', () => {
   let { s, A, D } = setup([3], [6]);
   s.players[D].field.push({ card: inst(24), owner: A, placedAt: 0 });

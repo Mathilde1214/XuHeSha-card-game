@@ -2,10 +2,11 @@
 import { createServer } from 'node:http';
 import { readFileSync, existsSync, statSync } from 'node:fs';
 import { join, extname, normalize } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { CARDS } from '../engine/src/cards.ts';
 
-const ROOT = new URL('./public/', import.meta.url).pathname;
-const CSV = new URL('../cards-v2.csv', import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL('./public/', import.meta.url));
+const CSV = new URL('../cards-v2.csv', import.meta.url);
 
 function parseCsv(text: string): string[][] {
   const rows: string[][] = []; let row: string[] = [], f = '', q = false;

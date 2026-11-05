@@ -198,7 +198,7 @@ function custom(s: GameState, key: string, it: StackItem, ctx: Ctx) {
 }
 
 function baseCost(pl: PlayerState, def: CardDef, x?: number) {
-  if (def.x) { if (x === undefined || x < def.x.min || x > def.x.max) throw new RuleError(`X 需在 ${def.x.min}–${def.x.max}`); }
+  if (def.x) { if (typeof x !== 'number' || !Number.isInteger(x) || x < def.x.min || x > def.x.max) throw new RuleError(`X 需为 ${def.x.min}–${def.x.max} 的整数`); }
   return def.escalating ? (pl.uses[def.id] ?? 0) + 1 : def.x ? x! : def.cost;
 }
 const costOf = baseCost;
@@ -402,6 +402,7 @@ export function apply(state: GameState, a: Action, ctx: Ctx): GameState {
     if (ph.free && !canCounter) {
       // #62/#63 的免费出牌：打出任意 1 张手牌，不耗 SP，先结算它，再结算 #62/#63
       checkPlayable(pl, def, card.uid);
+      if (def.x) baseCost(pl, def, a.x); // 免费只免 SP，X 仍需合法
       takeFromHand(pl, a.uid); tickFifthDay(s);
       s.log.push(`P${a.player} 免费打出 ${def.name}（先于 ${ctx.cards[top.card.defId].name} 结算）`);
       settle(s, { card, owner: a.player, x: a.x, choice: a.choice, qteHits: a.qteHits, targetUid: a.targetUid, wind: a.wind, formulaOk: a.formulaOk }, ctx);

@@ -254,6 +254,8 @@ export class Room {
 
   // ---------- 状态推送 + 防泄露 ----------
   private commitState(next: GameState, by: { seat: PlayerId; action: Action } | null) {
+    // 在替换状态前记录本阶段已经消耗的时间；响应 / 判定期间不消耗出牌时间。
+    if (this.state?.phase.kind === 'play') this.pauseTimers();
     const prev = this.state; this.state = next; this.ver++;
     const ph = next.phase;
     // 防泄露（§8、#41）：对方“有没有反制牌”只能由服务端知道。
@@ -268,20 +270,20 @@ export class Room {
       if (playedOwn) fake = by!.seat;
       else if (newPhase && ph.kind === 'play') fake = ph.active;
     }
+    const delay = fake === null ? 0 : randomInt(this.timing.fakeDelayMin, this.timing.fakeDelayMax + 1);
+    if (fake !== null) this.busyUntil[fake] = Date.now() + delay;
+    this.scheduleTimers(fake !== null && ph.kind === 'play' && fake === ph.active ? delay : 0);
     for (const p of [0, 1] as PlayerId[]) {
       if (waiter === p) { this.holdState[p] = true; this.toSeat(p, { t: 'waiting', who: other(p) }); continue; }
       this.holdState[p] = false;
       if (fake === p) {
-        const d = randomInt(this.timing.fakeDelayMin, this.timing.fakeDelayMax + 1);
         this.toSeat(p, { t: 'waiting', who: other(p) });
-        this.busyUntil[p] = Date.now() + d;
         clearTimeout(this.delayTimer);
-        this.delayTimer = setTimeout(() => this.pushState(p), d);
+        this.delayTimer = setTimeout(() => this.pushState(p), delay);
         continue;
       }
       this.pushState(p);
     }
-    this.scheduleTimers(fake !== null && ph.kind === 'play' && fake === ph.active ? this.busyUntil[fake] - Date.now() : 0);
     if (ph.kind === 'over') {
       this.clearAllTimers(); this.rematch = [false, false];
       clearTimeout(this.closeTimer); this.closeTimer = setTimeout(() => this.close(), 10 * 60_000); this.closeTimer.unref?.();
@@ -306,32 +308,40 @@ export class Room {
 
   // ---------- 计时 ----------
   private phaseDeadline = 0;
+  private phaseKey = '';
   private pauseTimers() {
     clearTimeout(this.phaseTimer);
     const ph = this.state?.phase;
-    if (ph?.kind === 'play') this.playRemaining = Math.max(0, this.playDeadline - Date.now());
+    if (ph?.kind === 'play' && this.playDeadline) {
+      this.playRemaining = Math.max(0, this.playDeadline - Date.now());
+      this.playDeadline = 0;
+    }
+    this.phaseDeadline = 0;
   }
   private scheduleTimers(extraMs = 0) {
     clearTimeout(this.phaseTimer);
     const st = this.state!; const ph = st.phase; const T = this.timing;
     if (ph.kind === 'play') {
+      this.phaseDeadline = 0;
       const key = `${st.round}:${ph.active}`;
       if (key !== this.playKey) { this.playKey = key; this.playRemaining = T.playMs + Math.max(0, extraMs); }
       this.playDeadline = Date.now() + this.playRemaining;
       this.phaseTimer = setTimeout(() => this.auto({ type: 'end_phase', player: ph.active }), this.playRemaining);
       return;
     }
-    if (this.playDeadline && ph.kind !== 'over') this.playRemaining = Math.max(0, this.playDeadline - Date.now());
+    const key = JSON.stringify([st.round, ph, st.stack.at(-1)?.card.uid]);
+    if (key !== this.phaseKey) this.phaseDeadline = 0;
+    this.phaseKey = key;
     if (ph.kind === 'response' || ph.kind === 'interject') {
-      this.phaseDeadline = Date.now() + T.responseMs;
-      this.phaseTimer = setTimeout(() => this.auto({ type: 'pass', player: ph.responder }), T.responseMs);
+      this.phaseDeadline ||= Date.now() + T.responseMs;
+      this.phaseTimer = setTimeout(() => this.auto({ type: 'pass', player: ph.responder }), Math.max(0, this.phaseDeadline - Date.now()));
     } else if (ph.kind === 'select') {
-      this.phaseDeadline = Date.now() + T.selectMs;
+      this.phaseDeadline ||= Date.now() + T.selectMs;
       this.phaseTimer = setTimeout(() => {
         if (ph.reason === 'math_quiz') return this.auto({ type: 'pick', player: ph.chooser } as Action);
         const hand = this.state!.players[ph.chooser].hand;
         if (hand.length) this.auto({ type: 'give_card', player: ph.chooser, uid: hand[randomInt(hand.length)].uid });
-      }, T.selectMs);
+      }, Math.max(0, this.phaseDeadline - Date.now()));
     }
   }
 
