@@ -5,6 +5,7 @@ import { DEFAULT_TIMING } from '../src/room.ts';
 import { checkFormulas } from '../src/formulas.ts';
 import { CARDS } from '../../engine/src/cards.ts';
 import { Client } from './helpers.ts';
+process.env.XHS_STATS_FILE = '/tmp/xhs-test-games.jsonl';
 
 const PORT = 18787;
 const fast = { ...DEFAULT_TIMING, playMs: 3000, responseMs: 300, selectMs: 300, pickMs: 300, formulaMs: 300, graceMs: 400,

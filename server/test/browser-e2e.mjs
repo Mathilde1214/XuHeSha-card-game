@@ -1,4 +1,5 @@
 import { chromium } from '/node_modules/playwright-core/index.mjs';
+process.env.XHS_STATS_FILE = '/tmp/xhs-e2e-games.jsonl';
 const { startServer } = await import('/workspace/xuhesha/server/src/main.ts');
 const { DEFAULT_TIMING } = await import('/workspace/xuhesha/server/src/room.ts');
 const srv = startServer(8793, { ...DEFAULT_TIMING, graceMs: 2500 });

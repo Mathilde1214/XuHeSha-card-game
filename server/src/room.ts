@@ -1,5 +1,8 @@
 // 《续禾杀》房间：一局两人。服务端唯一权威，按 protocol-v1.md 实现。
 import { randomBytes, randomInt } from 'node:crypto';
+import { appendFile, mkdir } from 'node:fs/promises';
+import { dirname as pathDirname, join as pathJoin } from 'node:path';
+import { fileURLToPath as toPath } from 'node:url';
 import { apply, createGame, RuleError, viewFor } from '../../engine/src/engine.ts';
 import { CARDS } from '../../engine/src/cards.ts';
 import type { Action, CardDef, Ctx, Faction, GameState, PlayerId } from '../../engine/src/types.ts';
@@ -59,6 +62,7 @@ export class Room {
   game = 0;                                   // 第几局（再来一局 +1）
   private rematch: [boolean, boolean] = [false, false];
   private closeTimer?: NodeJS.Timeout;
+  private endReason = 'hp'; private startedAt = 0;
 
   code: string; timing: Timing; onClose: (r: Room) => void; private seed: number;
   constructor(code: string, timing: Timing = DEFAULT_TIMING, onClose: (r: Room) => void = () => {},
@@ -103,6 +107,7 @@ export class Room {
   private forfeit(loser: PlayerId, why: string) {
     if (!this.state || this.state.phase.kind === 'over') { this.close(); return; }
     const st = structuredClone(this.state);
+    this.endReason = why.includes('掉线') ? 'disconnect' : why.includes('离开') ? 'leave' : 'forfeit';
     st.phase = { kind: 'over', winner: other(loser) }; st.log.push(`P${loser} ${why}，判负`);
     this.commitState(st, null);
   }
@@ -135,6 +140,7 @@ export class Room {
     const [a, b] = this.seats;
     if (a?.faction && b?.faction) {
       const st = createGame(CARDS, [a.faction, b.faction], this.seed);
+      this.startedAt = Date.now(); this.endReason = 'hp';
       this.commitState(st, null);
     }
   }
@@ -282,6 +288,7 @@ export class Room {
       this.pushState(p);
     }
     this.scheduleTimers(fake !== null && ph.kind === 'play' && fake === ph.active ? this.busyUntil[fake] - Date.now() : 0);
+    if (ph.kind === 'over' && prev && prev.phase.kind !== 'over') this.recordGame(next);
     if (ph.kind === 'over') {
       this.clearAllTimers(); this.rematch = [false, false];
       clearTimeout(this.closeTimer); this.closeTimer = setTimeout(() => this.close(), 10 * 60_000); this.closeTimer.unref?.();
@@ -351,6 +358,20 @@ export class Room {
       console.error('自动处理失败', e);
     }
   }
+  // ---------- 对局记录（真人数据：先手、胜者、回合数）----------
+  private recordGame(st: GameState) {
+    const ph = st.phase; if (ph.kind !== 'over') return;
+    const file = process.env.XHS_STATS_FILE ?? pathJoin(pathDirname(toPath(import.meta.url)), '..', 'data', 'games.jsonl');
+    if (!file) return;
+    const rec = {
+      endedAt: new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Shanghai' }) + ' +08:00',
+      room: this.code, game: this.game, first: st.first, winner: ph.winner, firstWon: ph.winner === st.first,
+      rounds: st.round, reason: this.endReason, seconds: Math.round((Date.now() - this.startedAt) / 1000),
+      factions: st.players.map((p) => p.faction), hp: st.players.map((p) => p.hp), isFriday: this.ctx.isFriday,
+    };
+    mkdir(pathDirname(file), { recursive: true }).then(() => appendFile(file, JSON.stringify(rec) + '\n')).catch((e) => console.error('写对局记录失败', e));
+  }
+
   // ---------- 再来一局 / 离开 ----------
   private onRematch(seat: PlayerId, want: boolean) {
     if (!this.state || this.state.phase.kind !== 'over') throw new RuleError('对局结束后才能再来一局');

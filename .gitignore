@@ -4,3 +4,4 @@ tools/
 scan/
 xuhesha-cards-scan.pdf
 *.log
+server/data/
