@@ -1,10 +1,12 @@
-import { chromium } from '/node_modules/playwright-core/index.mjs';
-process.env.XHS_STATS_FILE = '/tmp/xhs-e2e-games.jsonl';
-const { startServer } = await import('/workspace/xuhesha/server/src/main.ts');
-const { DEFAULT_TIMING } = await import('/workspace/xuhesha/server/src/room.ts');
+import { chromium } from 'playwright-core';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+process.env.XHS_STATS_FILE = join(tmpdir(), 'xhs-e2e-games.jsonl');
+const { startServer } = await import('../src/main.ts');
+const { DEFAULT_TIMING } = await import('../src/room.ts');
 const srv = startServer(8793, { ...DEFAULT_TIMING, graceMs: 2500 });
 const U = 'http://127.0.0.1:8793/';
-const browser = await chromium.launch({ executablePath: '/usr/bin/google-chrome', args: ['--no-sandbox'] });
+const browser = await chromium.launch({ executablePath: process.env.BROWSER_EXECUTABLE || undefined, args: ['--no-sandbox'] });
 const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
 const tab = async () => { const p = await ctx.newPage(); p.on('pageerror', (e) => console.log('页面报错', e.message)); await p.goto(U); await p.waitForTimeout(400); return p; };
 const st = (p) => p.evaluate(() => { const v = window.__xhs.view; return v ? { self: v.self, kind: v.phase.kind, round: v.round } : null; });
@@ -13,7 +15,8 @@ const A = await tab(), B = await tab();
 await A.click('#btn-create'); await A.waitForTimeout(300);
 const code = await A.textContent('#room-code');
 await B.fill('#in-code', code); await B.click('#btn-join'); await B.waitForTimeout(400);
-await A.click('#faction button[data-f="sweet"]'); await B.click('#faction button[data-f="savory"]'); await A.waitForTimeout(800);
+await A.click('#faction button[data-f="sweet"]'); await B.click('#faction button[data-f="savory"]');
+await Promise.all([A, B].map(p => p.waitForFunction(() => !!window.__xhs.view)));
 ok((await st(A))?.self === 0 && (await st(B))?.self === 1, '两个标签页开局');
 await A.reload(); await A.waitForTimeout(1200);
 ok((await st(A))?.self === 0, '刷新页面后回到原座位接着打');
@@ -30,7 +33,7 @@ ok(await A.isVisible('#faction') && await D.isVisible('#faction'), '双方同意
 ok(await A.textContent('#room-code') === code, '房间号不变');
 await A.click('#faction button[data-f="savory"]'); await D.click('#faction button[data-f="sweet"]'); await A.waitForTimeout(1500);
 const s2 = await st(A); ok(s2 && s2.kind !== 'over' && s2.round === 1, '第二局开局');
-await A.screenshot({ path: '/workspace/xuhesha/client/shot-rematch.png' });
+
 D.once('dialog', (d) => d.accept());
 await D.click('button:has-text("认输离开")'); await A.waitForTimeout(800);
 ok(await A.isVisible('#lobby-start'), '对手认输离开后，回到大厅并提示房间关闭');

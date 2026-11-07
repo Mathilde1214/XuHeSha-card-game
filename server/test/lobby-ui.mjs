@@ -1,0 +1,43 @@
+import assert from 'node:assert/strict';
+import { fileURLToPath } from 'node:url';
+import { mkdirSync } from 'node:fs';
+import { once } from 'node:events';
+import { chromium } from 'playwright-core';
+import { startServer } from '../src/main.ts';
+const srv = startServer(0);
+await once(srv.wss, 'listening');
+const browser = await chromium.launch({executablePath:process.env.BROWSER_EXECUTABLE || undefined});
+try {
+  const context = await browser.newContext({viewport:{width:1280,height:900}});
+  const errors=[];
+  const a=await context.newPage(), b=await context.newPage();
+  for(const p of [a,b]) {p.on('pageerror',e=>errors.push(e.message)); await p.goto(`http://127.0.0.1:${srv.wss.address().port}/`); await p.waitForFunction(()=>window.__xhs?.ws?.readyState===1);}
+  mkdirSync(new URL('../../art/previews/',import.meta.url),{recursive:true});
+  const shot = name => fileURLToPath(new URL(`../../art/previews/${name}.png`,import.meta.url));
+  await a.screenshot({path:shot('lobby-desktop'),fullPage:true});
+  await a.click('#btn-lobby-rules'); assert.equal(await a.isVisible('#modal'),true); await a.click('#rules-close');
+  await a.fill('#in-code','12'); await a.click('#btn-join'); assert.equal(await a.isVisible('#lobby-start'),true);
+  await a.click('#btn-create'); await a.waitForFunction(()=>document.querySelector('#room-code').textContent.length===6);
+  const oldCode=await a.textContent('#room-code');
+  await a.evaluate(()=>Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async text=>{window.copiedCode=text;}}}));
+  await a.click('#btn-copy-code'); assert.equal(await a.evaluate(()=>window.copiedCode),oldCode);
+  await a.evaluate(()=>Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async()=>{throw new Error('unavailable');}}}));
+  await a.click('#btn-copy-code'); assert.equal(await a.evaluate(()=>window.getSelection().toString()),oldCode);
+  await a.click('#btn-lobby-back'); assert.equal(await a.isVisible('#lobby-start'),true);
+  await a.click('#btn-create'); await a.waitForFunction(()=>!document.querySelector('#lobby-room').hidden);
+  const code=await a.textContent('#room-code'); assert.equal(srv.rooms.has(oldCode),false); assert.equal(srv.rooms.size,1);
+  await a.waitForTimeout(2700);
+  await a.screenshot({path:shot('lobby-waiting'),fullPage:true});
+  await b.fill('#in-code',code); await b.locator('#in-code').press('Enter');
+  await a.waitForFunction(()=>!document.querySelector('#faction').hidden);
+  assert.equal(await a.textContent('#lobby-friend-label'),'好友 · 已加入');
+  await a.screenshot({path:shot('lobby-factions'),fullPage:true});
+  await a.setViewportSize({width:390,height:844});
+  assert.equal(await a.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+  await a.screenshot({path:shot('lobby-mobile'),fullPage:true});
+  await a.click('[data-f="sweet"]'); await a.waitForFunction(()=>document.querySelector('#lobby-self-label').textContent==='我 · 已准备');
+  await b.click('[data-f="savory"]'); await a.waitForFunction(()=>window.__xhs.view);
+  assert.equal(await a.isVisible('#game'),true);
+  assert.deepEqual(errors,[]);
+  console.log('PASS: lobby layout, join validation/Enter, copy/fallback, leave/recreate, friend presence, faction selection, mobile width, game start');
+} finally {await browser.close();await srv.close();}
