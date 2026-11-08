@@ -5,7 +5,7 @@ import { DEFAULT_TIMING } from '../src/room.ts';
 import { checkFormulas } from '../src/formulas.ts';
 import { CARDS } from '../../engine/src/cards.ts';
 import { Client } from './helpers.ts';
-process.env.XHS_STATS_FILE = '/tmp/xhs-test-games.jsonl';
+process.env.XHS_STATS_FILE = ''; // 普通对战测试不写入真人统计
 
 const PORT = 18787;
 const fast = { ...DEFAULT_TIMING, playMs: 3000, responseMs: 300, selectMs: 300, pickMs: 300, formulaMs: 300, graceMs: 400,
@@ -13,6 +13,23 @@ const fast = { ...DEFAULT_TIMING, playMs: 3000, responseMs: 300, selectMs: 300, 
 const srv = startServer(PORT, fast);
 after(() => srv.close());
 const url = `ws://127.0.0.1:${PORT}/ws`;
+
+test('异常 HTTP / WebSocket 输入被拒绝，服务和连接仍可继续使用', async () => {
+  const response = await fetch(`http://127.0.0.1:${PORT}/%`);
+  assert.equal(response.status, 400);
+  assert.equal((await fetch(`http://127.0.0.1:${PORT}/`)).status, 200);
+  const c = new Client(url); await c.open();
+  try {
+    for (const raw of ['null', '[]', '42', '"hello"', '{}', '{"t":null}', '{']) {
+      c.ws.send(raw);
+      await c.next((m) => m.t === 'reject');
+    }
+    c.send({ t: 'create_room' });
+    assert.equal((await c.next((m) => m.t === 'room')).seat, 0);
+    c.send({ t: 'ping' });
+    await c.next((m) => m.t === 'pong');
+  } finally { c.close(); }
+});
 
 async function pair() {
   const a = new Client(url), b = new Client(url); await a.open(); await b.open();
